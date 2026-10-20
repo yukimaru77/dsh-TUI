@@ -1,0 +1,44 @@
+# Apply over the live Web profile. No backend, preset, provider, tool, or
+# prompt rows are copied here: Web owns them, including future plugin changes.
+# Only the transport and terminal presentation differ.
+- id: web-startup
+  disabled: true
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 0
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+- id: web-runtime
+  config:
+    openBrowser: false
+    printUrl: false
+    surfaceContext: true
+- insert:
+    - id: tui-web-profile-startup
+      name: ./lib/types/dsh-adapter/web-profile-startup.js
+    - id: dsh-tui-workspaces
+      name: ./lib/types/workspaces.js
+    - id: dsh-tui-command-trees
+      name: ./lib/types/command-trees.js
+    - id: dsh-tui-settings-sections
+      name: ./lib/types/settings-sections.js
+    - id: dsh-tui-scenes
+      name: ./lib/types/scenes.js
+    - id: dsh-tui-panels
+      name: ./lib/types/panels.js
+    - id: dsh-tui-plugin-host
+      name: ./lib/types/plugin-host.js
+    - id: dsh-tui-extensions
+      name: ./lib/types/extensions.js
+    - id: dsh-tui
+      name: ./lib/types/index.js
+      inject: [workspaceRegistry, agents, agentDefaultModel, tuiWorkspaces, tuiScenes, tuiPanels, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
+      config:
+        followProfileDefaults: true
+        backend: dsh
+        fullscreen: true
+        terminalImages: true
+        workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
+        sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined

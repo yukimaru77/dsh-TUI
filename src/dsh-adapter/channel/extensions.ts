@@ -139,7 +139,7 @@ export function attachDshExtensions(
   // fire-and-forget promise never blocks a bind.
   const upstreamRetryAttempted = new Set<string>()
   const seedUpstreamRetry = (provider: string | undefined): void => {
-    if (options.upstreamRetry === false) return
+    if (options.followProfileDefaults || options.upstreamRetry === false) return
     if (adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow') return
     if (provider === undefined || provider === '' || upstreamRetryAttempted.has(provider)) return
     upstreamRetryAttempted.add(provider)
@@ -390,7 +390,7 @@ export function attachDshExtensions(
   const resetProjection = core.feed.resetProjection
   const projector = core.feed.projector
 
-  const modelSelection = createModelSelection(ctx, { owner, agent: () => binding.agent })
+  const modelSelection = createModelSelection(ctx, { owner, agent: () => binding.agent, followProfileDefaults: options.followProfileDefaults })
   const { selection } = modelSelection
   // Registry command policy and rc.8 image encoding are an owner-scoped module.
   const externalCommands = createExternalCommandInvoker(ctx, {
@@ -416,6 +416,7 @@ export function attachDshExtensions(
   // Agent-view is activated after the complete state/action surface exists:
   // no roster callback or persistence continuation can observe an unbound UI.
   agentView = createAgentViewProjection(ctx, {
+    followProfileDefaults: options.followProfileDefaults,
     owner, binding, cwd: () => state.cwd,
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
@@ -529,6 +530,7 @@ export function attachDshExtensions(
   state.emit()
 
   const modelActions = createModelActions(ctx, state, {
+    followProfileDefaults: options.followProfileDefaults,
     owner,
     binding,
     selection,
@@ -544,6 +546,7 @@ export function attachDshExtensions(
   const clearStagedImages = core.input.clearStagedImages
 
   const switchModelAction = createModelSwitchAction(ctx, state, {
+    followProfileDefaults: options.followProfileDefaults,
     owner,
     binding,
     selection,
@@ -568,6 +571,7 @@ export function attachDshExtensions(
   // state, while the state exposes their command surface. It is assigned
   // before the channel starts binding/session observation.
   const modeActions = createPermissionModeActions(ctx, state, {
+    followProfileDefaults: options.followProfileDefaults,
     owner,
     runtime: adapterRuntime,
     binding,
@@ -647,6 +651,7 @@ export function attachDshExtensions(
   })
 
   const resumeActions = createSessionResumeActions(ctx, state, {
+    followProfileDefaults: options.followProfileDefaults,
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
@@ -717,6 +722,7 @@ export function attachDshExtensions(
   })
   settleManualCompaction = manualCompaction.settle
   backgroundCurrentAction = createBackgroundCurrentAction(ctx, state, {
+    followProfileDefaults: options.followProfileDefaults,
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
@@ -856,7 +862,7 @@ export function attachDshExtensions(
   // ModelSelectionRef, so fill an otherwise incomplete first request from
   // the active route. Keep complete child-specific routes authoritative.
   // Registered before the first bind's own `agent/request` listener.
-  const disposeInheritedChildRoute = ctx.on('agent/request', async (_payload, next) => {
+  const disposeInheritedChildRoute = options.followProfileDefaults ? () => {} : ctx.on('agent/request', async (_payload, next) => {
     // This listener intentionally serves child scopes, not the bound agent's
     // selection pipeline. Capture the foreground route before awaiting so an
     // old child waterfall cannot borrow a later binding's model (A→B→A safe).

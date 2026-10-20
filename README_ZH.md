@@ -339,6 +339,8 @@ teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行�
 
 ## 配置与扩展
 
+本地分支可直接使用现有 Web profile 作为唯一后端配置：`sh bin/dsh-tui-web`。模型、预设、provider、工具、提示词、KB 和已安装 bundle 都跟随 Web，仅追加终端界面。实时更新和重启范围见[共享 Web profile 模式](docs/web-profile.md)。
+
 Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/configuration.md) · [主题系统](docs/themes.md)。
 
 DeepSeek 品牌下，宠物皮肤 `deepy` 或 `whaleGirl` 会取代女仆娘立绘；选择 `whale` 并开启「女仆娘立绘」即可使用。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。详见[配置参考](docs/configuration.md)。

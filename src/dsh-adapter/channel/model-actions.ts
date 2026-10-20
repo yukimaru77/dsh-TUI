@@ -11,6 +11,7 @@ import { installedMeetsVersion } from '../contract.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
+import { saveProfileModelSelection, saveProfilePreset } from '../profile-defaults.js'
 
 type Binding = DshChannelBinding
 
@@ -23,6 +24,7 @@ export function createModelActions(
   ctx: Context,
   state: Pick<ChannelState, 'provider' | 'model' | 'reasoningEffort' | 'effortLevels' | 'agentPreset' | 'working' | 'contextWindow' | 'emit'>,
   deps: {
+    followProfileDefaults?: boolean
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
     selection: ModelSelectionRef
@@ -45,13 +47,13 @@ export function createModelActions(
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
     | undefined
-  let preferredEffort: string | undefined = readEffortPref() ?? deps.initialEffort
+  let preferredEffort: string | undefined = deps.followProfileDefaults ? undefined : readEffortPref() ?? deps.initialEffort
   // Last fallback notice shown for a (preferred → applied) pair: bind fires on
   // every session switch, so an unchanged downgrade must not re-toast.
   let lastEffortFallbackNotice: { preferred: string; applied: string | undefined } | undefined
   // State construction cannot call this factory yet; seed the visible value
   // before the root starts binding or exposes the completed ChannelState.
-  state.reasoningEffort = preferredEffort
+  if (!deps.followProfileDefaults) state.reasoningEffort = preferredEffort
   let effortLevelsGeneration = 0
   let effortOperation = 0
   let presetOperation = 0
@@ -134,6 +136,13 @@ export function createModelActions(
     const capture = captureEffort()
     const resolved = await resolveEfforts(capture)
     if (resolved === 'unavailable' || resolved === 'error' || resolved === 'stale' || !effortCurrent(capture)) return
+    if (deps.followProfileDefaults) {
+      // The bound session's selection owns effort. A new session reads the
+      // profile; resuming or parking retains its own explicit choice.
+      state.reasoningEffort = selection.current?.reasoningEffort ?? resolved.defaultEffort
+      state.emit()
+      return
+    }
     // This same binding-time lookup is the route's initial tier refresh even
     // without a stored preference. Do not make a separate competing refresh
     // operation that could invalidate the selected preference completion.
@@ -201,7 +210,11 @@ export function createModelActions(
     selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(effort.id) }
     preferredEffort = effort.id
     state.reasoningEffort = effort.id
-    writeEffortPref(effort.id)
+    if (deps.followProfileDefaults) {
+      void saveProfileModelSelection(ctx, selection.current).catch(error => {
+        if (owner.current()) notify(`Could not save profile model selection: ${String(error)}`, { color: 'warning' })
+      })
+    } else writeEffortPref(effort.id)
     notify(t('effort-switched', { name: effort.name }))
     state.emit()
   }
@@ -253,6 +266,7 @@ export function createModelActions(
    * lands on the next request. No-op when unchanged.
    */
   const setDefaultEffort = (id: string | undefined): void => {
+    if (deps.followProfileDefaults) return
     const resolved = resolveEffortDefault(id, deps.initialEffort, readEffortPref())
     if (resolved === preferredEffort) return
     preferredEffort = resolved
@@ -323,12 +337,16 @@ export function createModelActions(
     if (!current()) return false
     if (target.broken !== undefined) { notify(t('preset-load-failed', { id: target.id, broken: target.broken }), { color: 'error', timeoutMs: 8000 }); return false }
     if (target.id === state.agentPreset) {
-      if (!migratePresetPref(presetId, target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
+      if (!deps.followProfileDefaults && !migratePresetPref(presetId, target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
       notify(t('preset-already-current', { id: target.id }), { color: 'success' }); return true
     }
     if (snapshotLiveSessionEvents(targetSession).some(event => event.type === 'turn/start')) {
       if (!current()) return false
-      if (!writePresetPref(target.id)) { notify(t('preset-pref-write-failed'), { color: 'error' }); return false }
+      try {
+        if (deps.followProfileDefaults) await saveProfilePreset(ctx, target.id)
+        else if (!writePresetPref(target.id)) throw new Error('preference write failed')
+      } catch { if (current()) notify(t('preset-pref-write-failed'), { color: 'error' }); return false }
+      if (!current()) return false
       notify(t('preset-locked-saved-default', { current: state.agentPreset ?? 'host', id: target.id }), { color: 'warning', timeoutMs: 8000 }); return true
     }
     let preset: AgentPresetInfo
@@ -339,7 +357,11 @@ export function createModelActions(
     state.agentPreset = preset.id
     state.emit()
     if (!current()) return false
-    if (!writePresetPref(target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
+    try {
+      if (deps.followProfileDefaults) await saveProfilePreset(ctx, target.id)
+      else if (!writePresetPref(target.id)) throw new Error('preference write failed')
+    } catch { if (current()) notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
+    if (!current()) return false
     notify(t('preset-switched-saved', { id: target.id }), { color: 'success' }); return true
   }
   return { selection, applyPreferredEffort, refreshEffortLevels, listEfforts, setEffort, setDefaultEffort, warmEffortLevels, listModels, listProviders, dropModelNodeCache, warmModelNodes, modelNodes: () => modelNodeCache.nodes ?? [], warmPresetOptions, presetOptions: () => presetOptionCache.list ?? [], listPresets, switchPreset }

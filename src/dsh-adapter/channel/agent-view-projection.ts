@@ -3,8 +3,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
-import { resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
-import { readModelPref } from '../../modelPrefs.js'
+import { validateModelRoute } from '../../modelRoute.js'
+import { profileStartupRoutes } from '../profile-defaults.js'
 import { presetOverrideFromEnv, readPresetPref } from '../../presetPrefs.js'
 import { forgetAgentViewSession, readAgentViewSessions, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
@@ -39,6 +39,7 @@ type ApprovalStore = {
 export function createAgentViewProjection(
   ctx: Context,
   deps: {
+    followProfileDefaults?: boolean
     owner: Pick<ChannelOwner, 'current' | 'assertActive' | 'own'>
     binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'waitForDisposal'>
     cwd(): string
@@ -182,10 +183,10 @@ export function createAgentViewProjection(
     let detached: Awaited<ReturnType<typeof deps.createDetached>>
     try {
       deps.owner.assertActive()
-      const composed = await composePreset(ctx, presetOverrideFromEnv() ?? readPresetPref() ?? deps.configuredPreset)
-      const resolved = resolveModelRoute({ provider: deps.configuredProvider, model: deps.configuredModel }, readModelPref(), { provider: deps.provider, model: deps.model })
+      const composed = await composePreset(ctx, deps.followProfileDefaults ? undefined : presetOverrideFromEnv() ?? readPresetPref() ?? deps.configuredPreset)
+      const { startupRoute: resolved, deploymentRoute } = profileStartupRoutes(ctx, { provider: deps.configuredProvider, model: deps.configuredModel }, deps.followProfileDefaults, { provider: deps.provider, model: deps.model })
       const llm = ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined
-      const { route } = await validateModelRoute(llm, resolved, { provider: deps.provider, model: deps.model })
+      const { route } = await validateModelRoute(llm, resolved, deploymentRoute)
       deps.owner.assertActive()
       detached = await deps.createDetached(() => service.create({
         sessionId,

@@ -54,6 +54,10 @@ export interface Config {
    *  branded `KernelBackendId` here breaks published consumers instead
    *  (PR #1380 review R1). */
   backend?: string
+  /** Use the host profile's model, effort, preset and permission defaults.
+   * Ignores TUI behavioral preferences and leaves tools and retry policy to
+   * the host. Display preferences remain local to this interface. */
+  followProfileDefaults?: boolean
   /** LLM provider route. The route resolves atomically (issue #67): the
    *  `/model` choice persisted in `~/.dsh-tui/model.json` — the route the
    *  last session ran — wins whole; otherwise a `provider`+`model` pair named
@@ -308,6 +312,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   // persisted `/model` preference could never win (issue #30). The defaults
   // live at the end of the fallback chain in modelRoute.ts instead.
   provider: Schema.string().required(false),
+  followProfileDefaults: Schema.boolean().default(false),
   model: Schema.string().required(false),
   cwd: Schema.string().required(false),
   workspace: Schema.string().required(false),

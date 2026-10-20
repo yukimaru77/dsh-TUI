@@ -6,6 +6,7 @@ import { writeModelPref } from '../../modelPrefs.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
+import { saveProfileModelSelection } from '../profile-defaults.js'
 
 type Binding = ReturnType<typeof createChannelBinding>
 type SwitchState = Pick<ChannelState, 'working' | 'provider' | 'model' | 'contextWindow' | 'effortLevels' | 'reasoningEffort' | 'emit'>
@@ -15,6 +16,7 @@ export function createModelSwitchAction(
   ctx: Context,
   state: SwitchState,
   deps: {
+    followProfileDefaults?: boolean
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
     selection: ModelSelectionRef
@@ -64,7 +66,11 @@ export function createModelSwitchAction(
     deps.dropModelCompletion()
     void deps.applyPreferredEffort()
     deps.seedUpstreamRetry(provider)
-    if (!writeModelPref(provider, model)) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
+    if (deps.followProfileDefaults) {
+      void saveProfileModelSelection(ctx, { provider, model }).catch(() => {
+        if (deps.owner.current()) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
+      })
+    } else if (!writeModelPref(provider, model)) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
     state.emit()
     return true
   }

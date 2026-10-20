@@ -2,8 +2,8 @@ import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
-import { resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
-import { readModelPref } from '../../modelPrefs.js'
+import { validateModelRoute } from '../../modelRoute.js'
+import { profileStartupRoutes } from '../profile-defaults.js'
 import { presetOverrideFromEnv, readPresetPref } from '../../presetPrefs.js'
 import { clearResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
@@ -27,7 +27,7 @@ export function createBackgroundCurrentAction(
   state: Pick<ChannelState,
     'cwd' | 'status' | 'agentId' | 'sessionId' | 'loadedContext' | 'contextWindow' |
     'effortLevels' | 'reasoningEffort' | 'emit' | 'notify'> & Parameters<typeof resetSessionProjection>[0],
-  options: { configuredPreset?: string; configuredProvider?: string; configuredModel?: string; provider: string; model: string },
+  options: { followProfileDefaults?: boolean; configuredPreset?: string; configuredProvider?: string; configuredModel?: string; provider: string; model: string },
   deps: {
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt'>
@@ -64,11 +64,12 @@ export function createBackgroundCurrentAction(
     if (!reserved.ok && reserved.reason !== 'occupied') deps.notify(mountFailureText(reserved), { color: 'warning', timeoutMs: 8000 })
     const reservation: MountReservation = reserved.ok ? reserved.reservation : { settle: () => {}, abandon: () => {} }
     try {
-      const composed = await composePreset(ctx, presetOverrideFromEnv() ?? readPresetPref() ?? options.configuredPreset)
+      const composed = await composePreset(ctx, options.followProfileDefaults ? undefined : presetOverrideFromEnv() ?? readPresetPref() ?? options.configuredPreset)
+      const { startupRoute, deploymentRoute } = profileStartupRoutes(ctx, { provider: options.configuredProvider, model: options.configuredModel }, options.followProfileDefaults, { provider: options.provider, model: options.model })
       const route = await validateModelRoute(
         ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined,
-        resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model }),
-        { provider: options.provider, model: options.model },
+        startupRoute,
+        deploymentRoute,
       )
       // `/bg` starts an unseeded session nobody has typed into yet, so it
       // shares the fresh-session gate: creation-time checkpoints (the

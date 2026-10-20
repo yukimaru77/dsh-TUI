@@ -128,6 +128,7 @@ export function createPermissionModeActions(
     BaseModeActionDeps,
     'owner' | 'runtime' | 'binding' | 'sessionModes' | 'executeRegistryCommand' | 'notify'
   > & {
+    followProfileDefaults?: boolean
     roster: PermissionModeRoster
     /** Only the permission identity reads the registry directly (#755 is the
      *  authoritative design for `/permission`); the plan route comes from the
@@ -208,6 +209,7 @@ export function createPermissionModeActions(
    *  to remember, and `auto` is session-only by contract; a failed write is a
    *  debug line, never user-facing. */
   const persistPermissionPref = (value: string | undefined): void => {
+    if (deps.followProfileDefaults) return
     if (value === undefined || value === PERMISSION_PRESET_CUSTOM || value === PERMISSION_PRESET_AUTO) return
     if (!writePermissionPref(value)) {
       ctx.logger.debug(`dsh-tui: permission preference write failed for "${value}"`)
@@ -403,6 +405,7 @@ export function createPermissionModeActions(
    *  explicitly asked for that start state) and to shadow runtimes, which
    *  must not write durable session policy. */
   const applyRememberedPermission = async (): Promise<void> => {
+    if (deps.followProfileDefaults) return
     try {
       if (deps.runtime.mode === 'passive-shadow' || deps.runtime.mode === 'replay-shadow') return
       const pinned = process.env.DSH_PERMISSION_MODE

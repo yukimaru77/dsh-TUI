@@ -61,7 +61,8 @@ const readJson = p => {
 const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
-const PROFILE = 'dsh-tui'
+const followWebProfile = process.env.DSH_TUI_FOLLOW_PROFILE_DEFAULTS === '1'
+const PROFILE = followWebProfile ? 'web' : 'dsh-tui'
 // Kept local so the launcher also works without compiled modules.
 /** 内置内核：只用于文案（"内置 dsh / claude / codex"）与 rescue/safe 提示。
  *  **不是校验来源**——插件后端由各自 profile 提供，启动器看不到，所以
@@ -77,6 +78,8 @@ const isBackendIdSyntax = value => typeof value === 'string' && BACKEND_ID_PATTE
 // 环境变量）。会话里模型常驻只多一行技能目录，用户真问到 dsh-tui 时才按需
 // 读手册。用户自己设过就不覆盖；包里没有 guide/（旧安装/裁剪包）时保持原样。
 const withGuideSkillDir = env => {
+  // A shared Web profile owns the model-visible skill roster as well.
+  if (env.DSH_TUI_FOLLOW_PROFILE_DEFAULTS === '1') return env
   if (env.DSH_BUNDLED_SKILL_DIR !== undefined) return env
   const guideDir = join(ownDir, 'guide')
   return existsSync(guideDir) ? { ...env, DSH_BUNDLED_SKILL_DIR: guideDir } : env
@@ -543,7 +546,8 @@ const sameDir = (a, b) => {
 
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
 const profileDir = join(dshHome, 'profiles', PROFILE)
-const profilePkgDir = join(profileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+// The shared profile owns backend packages; this checkout owns only the UI.
+const profilePkgDir = followWebProfile ? ownDir : join(profileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
 const profileBin = join(profilePkgDir, 'bin', 'dsh-tui.js')
 const installedPkgPath = join(profilePkgDir, 'package.json')
 const runningInsideProfile = sameDir(ownDir, profilePkgDir)
@@ -1431,6 +1435,10 @@ if (subcommand === 'safe') {
 // 编译产物缺失或没有 cliUpdate 导出（半更新的旧版）给手工升级指引退出 1。
 // 判定先于工作区目标嗅探：cwd 里名为 update 的文件不再被当成路径。
 if (subcommand === 'update') {
+  if (followWebProfile) {
+    console.error('[dsh-tui] This local UI is built from source. Update and rebuild its checkout; Web backend plugins are managed in the Web profile.')
+    process.exit(1)
+  }
   if (!profileReady()) bootstrapProfile()
   {
     const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })

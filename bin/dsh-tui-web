@@ -1,0 +1,11 @@
+#!/bin/sh
+# Same live Web profile and installed plugins; terminal presentation only.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export DSH_TUI_NO_DELEGATE=1
+export DSH_TUI_HOST_ENTRY=0
+export DSH_TUI_BACKEND=dsh
+export DSH_TUI_FOLLOW_PROFILE_DEFAULTS=1
+# The old wrapper pinned a separate preset and model; Web now owns defaults.
+unset DSH_TUI_PRESET
+exec /opt/homebrew/bin/node "$root/bin/dsh-tui.js" \
+  --patch "$root/cordis.web-ui.patch.yml" "$@"

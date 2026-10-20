@@ -41,7 +41,7 @@ import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
-import { readModelPref } from '../modelPrefs.js'
+import { profileStartupRoutes } from './profile-defaults.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, presetOverrideFromEnv, readPresetPref } from '../presetPrefs.js'
@@ -318,6 +318,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Modern hosts own a declarative registry; old hosts discover directories.
   // A modern bundle failure must not silently fall back to obsolete files.
   const installPresets = async (presetCtx: Context): Promise<void> => {
+    if (config.followProfileDefaults) return
     if (!await registerBundledPresets(presetCtx)) try {
       for (const result of ensurePackagedPresets()) {
         if (result.status === 'conflict') {
@@ -410,7 +411,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     readonly notice: string | undefined
   } => {
     const userQuestions = dshCtx.get('userQuestions') ?? new UserQuestionService(dshCtx)
-    dshCtx.plugin(toolAskUser)
+    if (!config.followProfileDefaults) dshCtx.plugin(toolAskUser)
     // The host-level tool mount above is intentional for the TUI and for user
     // presets, but the official Minimal preset is a single-tool trajectory (one
     // persistent shell: bash on POSIX, pwsh on Windows). Filter only that preset
@@ -420,7 +421,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // delegation rows, and a request that carries `spawn_teammate` drops
     // `subagent` / `subagent_fork` (team-mode.ts), so a team bundle switched
     // at run time reaches the sessions already running.
-    dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    if (!config.followProfileDefaults) dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
       const assembled = filterTeamReplacedTools(await next())
       const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
       return filterMinimalPresetTools(assembled, presetId)
@@ -490,7 +491,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // selection. The local DeepSeek pair remains the final fallback for bare
   // embedders without that service. This lets optional provider bundles supply
   // the same default to Web and TUI without patching this front door by name.
-  const { startupRoute, deploymentRoute } = startupRoutes(ctx, configuredRoute)
+  const { startupRoute, deploymentRoute } = startupRoutes(ctx, configuredRoute, config.followProfileDefaults)
   // Session cwd (issue #96): explicit cordis.yml `cwd` wins; otherwise the
   // git worktree root containing the launch directory (the launch directory
   // itself outside any worktree), so `@` completion and mention expansion
@@ -813,6 +814,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       deploymentRoute,
       meta,
       config.preset,
+      config.followProfileDefaults,
     )
   let agent: Agent | undefined = resolved.agent
   const { handle, agentPreset, route: createdRoute } = resolved
@@ -899,7 +901,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // set in `attachDsh` before adoption; the getters below serve them.
   const rowFacts: {
     route?: { readonly provider: string; readonly model: string }
-    config?: Pick<Config, 'provider' | 'model' | 'preset' | 'effort' | 'modes' | 'upstreamRetry'>
+    config?: Pick<Config, 'provider' | 'model' | 'preset' | 'effort' | 'modes' | 'upstreamRetry' | 'followProfileDefaults'>
   } = {}
   /**
    * The in-process DSH kernel's `/new` while no DSH session was adopted (its
@@ -978,6 +980,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // Read when the DSH extensions attach (the adoption), after the row's
     // facts are in; the display fields below are fixed at the first frame.
     get effort() { return rowFacts.config === undefined ? config.effort : rowFacts.config.effort },
+    get followProfileDefaults() { return (rowFacts.config ?? config).followProfileDefaults },
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
@@ -1479,6 +1482,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // choice mid-session.
     let lastEffortDefault: string | null | undefined = undefined
     const applyEffortDefault = (value: SettingsValue): void => {
+      if (config.followProfileDefaults) return
       const next = value.effortDefault ?? null
       if (next === lastEffortDefault) return
       lastEffortDefault = next
@@ -2373,7 +2377,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * two answer different questions, and an install that already knows its
    * workspace may still never have configured a key.
    */
-  const onboardingOnBoot = dshBoot && noResume && shouldOfferOnboarding()
+  const onboardingOnBoot = !config.followProfileDefaults && dshBoot && noResume && shouldOfferOnboarding()
   // 品牌镜像初值（branding.ts）：首帧渲染前铺好，避免 Claude 后端先画一屏
   // 蓝再变橙。Chat 里的 effect 会在品牌解析变化时跟进更新这个镜像。
   setActiveBrand(resolveBrand(config.brand, backendChoice))
@@ -2457,6 +2461,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // unavailable notice instead.
     onUpdate: profile === undefined ? undefined : () => {
       if (exited || updateRequested) return
+      if (config.followProfileDefaults) {
+        notifyChannel('This TUI follows the Web profile. Update its local source checkout and rebuild; /update does not modify the Web profile.', { color: 'warning' })
+        return
+      }
       // Confirm the target version before tearing the TUI down: on an
       // already-latest install, an unconditional update+restart would churn
       // the process and then trip the "version did not advance" warning.
@@ -2606,7 +2614,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
   // command remains available regardless of network access.
-  void checkForTuiUpdate().then((update) => {
+  if (!config.followProfileDefaults) void checkForTuiUpdate().then((update) => {
     if (update === undefined || exited || updateRequested) return
     const key = update.isStandalone ? 'update-standalone-available' : 'update-available'
     // A standalone release without a SHA256SUMS asset (published before the
@@ -2700,9 +2708,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         refreshHostServices()
         const rowRoute = { provider: rowConfig.provider, model: rowConfig.model }
         // The same startup/deployment split the plugin's own boot makes (issue #67).
-        const { startupRoute: rowStartupRoute, deploymentRoute: rowDeploymentRoute } = startupRoutes(dshCtx, rowRoute)
+        const { startupRoute: rowStartupRoute, deploymentRoute: rowDeploymentRoute } = startupRoutes(dshCtx, rowRoute, rowConfig.followProfileDefaults)
         const openOnRow = (sessionId: string | undefined, openMeta: { cwd: string }) =>
-          resolveAgent(dshCtx, sessionId, rowRoute, rowStartupRoute, rowDeploymentRoute, openMeta, rowConfig.preset)
+          resolveAgent(dshCtx, sessionId, rowRoute, rowStartupRoute, rowDeploymentRoute, openMeta, rowConfig.preset, rowConfig.followProfileDefaults)
         /** The opened agent is this screen's from now on; returns its route. */
         const takeOpened = async (opened: Awaited<ReturnType<typeof openOnRow>>): Promise<NonNullable<typeof rowFacts.route>> => {
           agent = opened.agent
@@ -2798,18 +2806,8 @@ function unsupportedWorkspaceTarget(target: string): string {
  * cordis.yml route, else Harness's agent-default-model selection — never the
  * lock the user's own pick replaced, never a half-pinned config.
  */
-function startupRoutes(ctx: Context, configuredRoute: { provider?: string; model?: string }): { startupRoute: ReturnType<typeof resolveModelRoute>; deploymentRoute: ReturnType<typeof resolveModelRoute> } {
-  const selected = (ctx.get('agentDefaultModel') as {
-    currentSelection?(): { provider?: unknown; model?: unknown }
-  } | undefined)?.currentSelection?.()
-  const harnessDefault = typeof selected?.provider === 'string' && selected.provider.length > 0
-    && typeof selected.model === 'string' && selected.model.length > 0
-    ? { provider: selected.provider, model: selected.model }
-    : undefined
-  return {
-    startupRoute: resolveModelRoute(configuredRoute, readModelPref(), harnessDefault),
-    deploymentRoute: resolveModelRoute(configuredRoute, undefined, harnessDefault),
-  }
+function startupRoutes(ctx: Context, configuredRoute: { provider?: string; model?: string }, followProfileDefaults = false): { startupRoute: ReturnType<typeof resolveModelRoute>; deploymentRoute: ReturnType<typeof resolveModelRoute> } {
+  return profileStartupRoutes(ctx, configuredRoute, followProfileDefaults)
 }
 
 async function resolveAgent(
@@ -2820,6 +2818,7 @@ async function resolveAgent(
   deploymentRoute: ModelRoute,
   meta: { cwd: string },
   configuredPreset?: string,
+  followProfileDefaults = false,
 ): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
   // Deployment fallback (issue #67): a resumed session continues on the route
   // its own request/header records carry (issue #30) — the route it actually
@@ -2935,10 +2934,10 @@ async function resolveAgent(
   // default), then the cordis.yml value as the deployment default, then the
   // roster default. The pref is migrated only when it was the effective
   // source — an override must not rewrite the remembered id.
-  const presetOverride = presetOverrideFromEnv()
-  const presetPref = readPresetPref()
-  const composed = await composePreset(ctx, presetOverride ?? presetPref ?? configuredPreset)
-  if (presetOverride === undefined && !migratePresetPref(presetPref, composed.agentPreset)) {
+  const presetOverride = followProfileDefaults ? undefined : presetOverrideFromEnv()
+  const presetPref = followProfileDefaults ? undefined : readPresetPref()
+  const composed = await composePreset(ctx, followProfileDefaults ? undefined : presetOverride ?? presetPref ?? configuredPreset)
+  if (!followProfileDefaults && presetOverride === undefined && !migratePresetPref(presetPref, composed.agentPreset)) {
     ctx.logger.warn(
       `dsh-tui: resolved preset preference "${presetPref}" as "${composed.agentPreset}" but could not persist the migrated id`,
     )
@@ -2951,6 +2950,7 @@ async function resolveAgent(
   const llm = ctx.get('llm') as
     | { listModels(provider: string): Promise<readonly { id: string }[]> }
     | undefined
+  if (followProfileDefaults) ({ startupRoute, deploymentRoute } = profileStartupRoutes(ctx, configuredRoute, true))
   const { route, rejected } = await validateModelRoute(llm, startupRoute, deploymentRoute)
   if (rejected !== undefined) {
     ctx.logger.warn(

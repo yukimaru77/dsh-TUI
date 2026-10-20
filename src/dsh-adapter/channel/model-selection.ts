@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { createChannelOwner, type ChannelOwner } from './owner.js'
+import { profileModelSelection } from '../profile-defaults.js'
 
 /** Routing belongs to the live agent, including turns running while parked.
  * The foreground facade follows the binding; each waterfall captures its own
@@ -9,6 +10,7 @@ import { createChannelOwner, type ChannelOwner } from './owner.js'
 export function createModelSelection(ctx: Context, deps: {
   owner: ChannelOwner
   agent(): Agent
+  followProfileDefaults?: boolean
 }) {
   const entries = new Map<Agent, { ref: ModelSelectionRef; release(): void }>()
   const foreground = (): ModelSelectionRef => {
@@ -32,7 +34,31 @@ export function createModelSelection(ctx: Context, deps: {
     // Seeded children can deliberately replace the inherited header's route.
     // Restore a recorded pin only when the caller actually adopted that route.
     const usesRecordedRoute = recorded?.provider === route.provider && recorded?.model === route.model
-    const ref: ModelSelectionRef = {
+    let picked: ModelSelectionRef['current']
+    if (deps.followProfileDefaults) {
+      const projections = ctx.get('sessionProjections') as { stateOf(session: unknown, name: string): { pending?: ModelSelectionRef['current'] | null } | undefined } | undefined
+      picked = projections?.stateOf(agent.session, 'modelSelection')?.pending ?? undefined
+    }
+    const ref: ModelSelectionRef = deps.followProfileDefaults ? {
+      get current() {
+        if (picked !== undefined) return picked
+        const header = agent.session.requestHeader?.()
+        if (header === undefined) return profileModelSelection(ctx) ?? { ...route }
+        const logged = header.config
+        return {
+          provider: logged.provider, model: logged.model,
+          ...(logged.reasoningEffort === undefined || header.adapterDefaults?.reasoningEffort === true
+            ? {} : { reasoningEffort: logged.reasoningEffort }),
+        }
+      },
+      set current(value) {
+        // Owned by the Web session-controller package; older peer typings
+        // do not augment SessionEventMap with this already-supported event.
+        if (value !== undefined) (agent.session as unknown as { append(type: string, data: unknown): void }).append('model/selection', value)
+        picked = value
+      },
+      assembled: undefined,
+    } : {
       current: route.provider !== '' && route.model !== '' &&
         (!hasCreatedRoute || (usesRecordedRoute &&
           (route.provider !== agent.options.provider || route.model !== agent.options.model)))
@@ -53,6 +79,16 @@ export function createModelSelection(ctx: Context, deps: {
       lifetime.assertActive()
     }
     try {
+      if (deps.followProfileDefaults) own(ctx.on('session/event', (session, event) => {
+        if (session !== agent.session || !current()) return
+        const type: string = event.type
+        if (type === 'model/selection') {
+          picked = event.data as unknown as ModelSelectionRef['current']
+        } else if (type === 'request/header' && picked !== undefined) {
+          const logged = (event.data as unknown as { header: { config: NonNullable<ModelSelectionRef['current']> } }).header.config
+          if (logged.provider === picked.provider && logged.model === picked.model && logged.reasoningEffort === picked.reasoningEffort) picked = undefined
+        }
+      }))
       own(agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
         const operation = ++assemblyOperation
         const selected = ref.current

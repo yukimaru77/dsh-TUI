@@ -45,6 +45,7 @@ export interface ChannelLaunchOptions {
   cwd: string
   provider: string
   effort?: string
+  followProfileDefaults?: boolean
   activity?: boolean
   /** Read the activity projection's current value when a session binds. A
    *  projection value only arrives on change, so a resumed session needs this

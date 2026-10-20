@@ -408,6 +408,8 @@ Full commands: [Interaction and commands](docs/interaction.en.md).
 
 ## Configuration & Extensions
 
+This local branch can use the existing Web profile as the sole backend configuration: `sh bin/dsh-tui-web`. Model, preset, providers, tools, prompts, KB and installed bundles follow Web; only the terminal presentation is added. See [shared Web profile mode](docs/web-profile.en.md) for live-update and restart behavior.
+
 Agent presets, themes, MCP servers, environment variables: [Configuration](docs/configuration.en.md) · [Themes](docs/themes.en.md).
 
 With the DeepSeek brand, Companion skins `deepy` and `whaleGirl` replace the maid portrait; choose `whale` and enable Maid portrait to use it. Claude uses its own artwork; Codex uses its own raster portrait or the maid character-art fallback. Both brands ignore these settings for splash artwork. See [Configuration](docs/configuration.en.md).
