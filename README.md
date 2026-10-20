@@ -29,7 +29,7 @@
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
-- **Task completion notifications** — DSH, Claude and Codex notify after successful live work settles, with no queued follow-up or active goal. The title is “dsh-TUI · Task complete”; the body shows the latest settled reply as a single-line plain-text preview (Markdown formatting removed, up to 200 characters). OSC 777/9 apply an additional 2048-byte sequence budget, including title and protocol bytes, preserving whole graphemes. No reply shows only the title; BEL only rings. `/settings` → Conversation: `taskNotifications` = `unfocused` (default), `always`, or `off`; `notificationMethod` = `auto` (default), `osc9`, or `bel`. Auto uses separate title/body fields on Ghostty/WezTerm (OSC 777) and Kitty (OSC 99); iTerm2/Warp and explicit `osc9` use a title prefix; other terminals ring the bell; delivery follows your terminal's notification/bell settings. tmux requires `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting. Terminals without focus reporting need `always`. Replay, cancellation and failures do not notify. Works in inline and fullscreen modes.
+- **Task completion notifications** — DSH, Claude and Codex notify after successful live work settles, with no queued follow-up or active goal. The title is “dsh-TUI · Task complete”; the body shows the latest settled reply as a single-line plain-text preview (Markdown formatting removed, up to 200 characters). OSC 777/9 apply an additional 2048-byte sequence budget, including title and protocol bytes, preserving whole graphemes. No reply shows only the title; BEL only rings. `/settings` → Conversation: `taskNotifications` = `unfocused` (default), `always`, or `off`; `notificationMethod` = `auto` (default), `osc9`, `bel`, or `windows`. Auto uses separate title/body fields on Ghostty/WezTerm (OSC 777) and Kitty (OSC 99); iTerm2/Warp and explicit `osc9` use a title prefix; other terminals ring the bell; delivery follows your terminal's notification/bell settings. On local Windows, `auto` resolves to `windows`, the system's native notifications: a task-completion toast. The first toast registers that user's AppUserModelID under HKCU, the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route), and for DSH sessions an enabled, active external DSH notification plugin in the running profile makes dsh-TUI yield to it (no toast, no bell); an installed but disabled plugin does not suppress notifications; if that AppUserModelID cannot be written, the notification falls back to the bell instead of going silent. SSH sessions keep the attached terminal's notification protocol in `auto` mode; explicit `windows` still selects the host's native transport. tmux requires `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting. Terminals without focus reporting need `always`. Replay, cancellation and failures do not notify. Works in inline and fullscreen modes.
 - **Native cursor** — focused text inputs inherit your terminal's cursor shape, color, blinking, and enabled animation or trail effects in both inline and fullscreen modes. The `/model` picker shows the same cursor during movement between provider tabs, model rows, and effort levels, then hides it after **0.5 seconds at rest**; clipped regions fall back to the model row. The session manager also moves this cursor between the workspace rail, session rows, and search box; typing claims the search caret, and navigation returns it to the focused row. Configure animation and trail effects in your terminal.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback. Kitty images scale to the reserved cells' physical pixels, including on HiDPI terminals.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
@@ -40,6 +40,7 @@
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
+  `/btw` uses an overlay when its sidebar cannot render. Main-task questionnaires and the fullscreen draft editor take priority while preserving the side question and draft.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
 - **DSH integrations** — presets, skills, MCP, goals, todos, subagents, questionnaires.
 - **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin.
@@ -91,6 +92,12 @@ daily** (TypeScript).
 
 ## Quick Start
 
+### Windows one-click installer (x64)
+
+Download `dsh-tui-setup-win-x64.exe` from [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) and run it. Per-user, no administrator, fully offline, and no preinstalled Node or DSH.
+
+### Command-line installation
+
 Prerequisites: [Node.js](https://nodejs.org/en) and
 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
@@ -106,6 +113,9 @@ On DSH rc.2, `/settings` also selects DeepSeek Search / Fetch APIs and edits the
 endpoint and result limits, supporting custom Loader entry IDs and a masked API
 key input saved through DSH's credential store. Official Flash model labels show the `1017` release
 marker while retaining the `deepseek-flash` model ID.
+
+`/settings` groups its sections into pages: the TUI's own settings sit under
+**General**, and plugins that declare a page get their own tab (`Tab` / `Shift+Tab`, or a click on the strip in fullscreen, switches pages; the strip is hidden when only one page exists).
 
 On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custom
 IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`
@@ -132,9 +142,12 @@ Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
-> `@img/sharp-*` native packages, saving about 200MB of downloads. `/update`
-> and `dsh-tui update` write both settings automatically. No manual step
-> needed. Details:
+> natives — the `@img/sharp-*` packages and the Claude SDK's per-platform
+> bundles — so only this machine's binaries are fetched. `/update` and
+> `dsh-tui update` write both settings automatically. An update never installs
+> the Claude SDK on its own: it enters a profile only when you pick that
+> backend in the kernel picker, which then installs the pinned SDK for the
+> running platform. No manual step needed. Details:
 > [Getting started](docs/getting-started.en.md#pnpm-install-script-blocks-and-foreign-platform-natives).
 
 After startup the TUI checks for newer versions in the background. It never
@@ -145,6 +158,13 @@ source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.
 
 ### CLI
+
+Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
+The independent engine does not load the TUI or inherit its profile/preferences;
+it uses official DSH headless/services (validated on 0.2.0-rc.2 and 0.2.1-rc.2).
+`dst cli --help` lists its commands; `dst dsh <argv...>` forwards native DSH.
+See [Automation CLI](docs/cli.en.md) for protocol, limits, resume restrictions,
+and Node/Python/PowerShell integration examples.
 
 | Command | Purpose |
 | --- | --- |
@@ -183,7 +203,7 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
-**VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
+**VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API. **Any terminal**: dsh-tui reports `idle` / `working` / `blocked` / `done` / `error` over the pty with [OSC 7501 (Program Status Protocol)](https://www.superlogical.com/rex/docs/build/program-status), so terminals and agentic inboxes that implement it can show what the session is doing; terminals that do not implement it ignore the sequence. Set `DSH_TUI_PROGRAM_STATUS=0` to turn it off.
 
 Bare `--resume` (`-c`, `--continue`) reopens the last session of the backend this
 launch selected. Startup recovery only ever targets that backend: a backend with no
@@ -294,32 +314,32 @@ OpenAI’s terms. Full instructions and current boundaries:
 
 DSH's experimental Agent Teams lets the session's agent (the Lead) create
 named teammates that share the working directory, message each other and
-coordinate on a shared task board. It is off by default. Install the
-upstream bundle into the TUI profile once:
+coordinate on a shared task board. It ships with dsh, is off by default, and
+`/plugin list` advertises it. Switch it on:
 
 ```sh
-dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@0.2.1-rc.2
+/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
 ```
 
-Then switch it with `/team on` / `/team off` (`/team` alone reports the
-bundle, the service and this session's teammates). The switch enables or
-disables the bundle in the profile, so it persists across restarts, and on a
-`dsh --profile` launch it applies at once — running sessions included: the
-model is told which tools came and went. Turning it off while teammates run
-asks first, and switching off stops them: the team service releases the
-teammates still running as it unloads. Inside a teammate session the other
-teammates' runs are not visible, so the question counts them as possibly
-running. The team record stays in the session for the next `/team on`.
-`/plugin enable|disable` on the bundle does the same.
+The switch enables or disables the bundle in the profile, so it persists
+across restarts, and on a `dsh --profile` launch it applies at once — running
+sessions included: the model is told which tools came and went. `/team` appears
+in Help and `/` completion only once the team service is mounted, and only
+reports: `/team` (or `/team status`) shows the bundle, the service and this
+session's teammates. `/team on|off` was removed; typing it points at
+`/plugin enable|disable`. Turning the bundle off while teammates run asks
+first, and switching off stops them: the team service releases the teammates
+still running as it unloads. Inside a teammate session the other teammates'
+runs are not visible, so the question counts them as possibly running. The
+team record stays in the session and comes back when the bundle is enabled
+again.
 
-Pin the version to exactly your installed DSH version (the command above
-uses the primary line `0.2.1-rc.2`; on DSH `0.2.1-alpha.5`, `0.2.0-rc.1` or
-`0.2.0-rc.2` install `…-profile@` that same version). The team packages ship in lockstep with DSH and pin
-their DSH peers exactly, so neither the untagged install nor `next` works.
-When the package is missing, `/team on` prints the command with your
-DSH version filled in on those lines (`0.2.1-rc.2` when the version cannot
-be read); on any other DSH version it asks you to switch DSH to one of those lines first, since
-no team bundle installs there.
+If the running DSH does not ship the bundle (`/plugin list` stays silent),
+switch DSH to one of the supported lines first (`0.2.1-rc.2`, `0.2.1-alpha.5`,
+`0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
+run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
+the team packages ship in lockstep with DSH and pin their DSH peers exactly,
+so the version must match.
 
 While a request carries `spawn_teammate`, dsh-TUI drops `subagent` /
 `subagent_fork` from it, and the team's `send_message` / `list_agents` /
@@ -396,6 +416,7 @@ Shortcuts sit below the title and effort levels have their own section; DSH, Cla
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
 The session manager focuses the most recently used session in the current workspace; if there is no history, it focuses the new-session card. Moving between the workspace rail and session list preserves the selected session, including when the mouse enters the list. Switching to another workspace selects its latest session; switching back also starts from its latest session instead of restoring an earlier selection. Press `←` to move to the workspace rail. DST preloads the session list in the background after startup and updates the cache on success. The manager paints the last successful list immediately. Opening `/resume` while that read is pending shares the request and receives results that have already arrived. This first-paint snapshot survives restarts on DSH, Claude and Codex and is isolated by backend and storage directory. With or without a snapshot, all three backends prioritize the current workspace before filling in other workspaces. Fresh sessions and titles merge into the list immediately; cached rows from other workspaces remain until the full read finishes. Background updates preserve a session the user has selected manually. Claude and Codex first request up to 32 recent sessions within their native cwd scope: Claude's SDK includes Git worktrees in the same repository, while Codex matches the session cwd exactly. Codex listings reuse the running connection and read the first 32 regular results alongside the state DB shortcut, then fill in later pages. The browser groups sessions by their own cwd. DSH resolves the current workspace's metadata first and publishes it before reading other workspaces' logs, even when it has fewer than 32 sessions. Titles that require a deeper DSH log scan appear first with a fallback name and update in place when recovery finishes.
+The session manager shows the selected workspace's absolute path once, beneath the source tabs (wrapping when needed; hover reveals exceptionally long paths). Session rows show their title and essential status/time instead of repeating the directory; DSH size and model remain in the title tooltip.
 With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity saves the complete log. Flushing a session that holds only initialization leaves it unstored. Restarting an unstored empty session starts fresh.
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
@@ -489,6 +510,8 @@ Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | r
 
 These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files), and a removal never deletes your own data: anything left under `~/.dsh-tui` is reported once and left for you to delete.
 
+`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams and Auto review), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
+
 ## Documentation
 
 - **Start** — [Getting started](docs/getting-started.en.md) · [VS Code](docs/vscode.en.md)
@@ -526,7 +549,7 @@ No sandbox of its own: dsh-TUI uses the active DSH profile's filesystem, shell, 
 
 **Permission persistence** (all three backends): the Claude and Codex backends keep their `/permission` picks in `~/.dsh-tui/backends/<id>/prefs.json`; the DSH pick is kept at `~/.dsh-tui/permission.json`. Every durable preset switch teaches it (picker, typed `/permission`, Shift+Tab static modes, or a switch the official command performed on its own), and a session that never customized its permission planes starts on the remembered preset — applied through the same official switch path. "Never customized" is about the user: the composition writes its own default preset into every fresh session at creation, and those events do not count. Plan-mode transients and the experimental Auto review preset (see below) are excluded, a `DSH_PERMISSION_MODE` launch pin (this run's initial permission plane) outranks the file, and an identity the mounted roster no longer offers is skipped.
 
-**Auto review** (DSH, experimental): when the `dsh-experimental-auto-review` plugin is enabled, the `auto` preset (shown as "Auto review", tagged `EXP`) appears in `/permission` and its completions live, and disappears when the plugin is removed. It is session-only: the model reviews every tool call before it runs, there is no file sandbox, and each call costs one extra model request; its approval prompts show the localized reason, and a subagent denial reads "Auto review denied; not executed". Picking it in the picker first shows a risk confirmation (`Enter` enables, `Esc` goes back; in fullscreen its Enable / Go back rows are clickable); a typed `/permission auto` switches directly. Once the current session has selected it, the picker skips the confirmation and Shift+Tab stops skipping it.
+**Auto review** (DSH, experimental): `/plugin list` advertises it; after `/plugin enable @deepseek-ai/dsh-experimental-auto-review`, the `auto` preset (shown as "Auto review", tagged `EXP`) appears in `/permission` and its completions live, and disappears when the plugin is removed. It is session-only: the model reviews every tool call before it runs, there is no file sandbox, and each call costs one extra model request; its approval prompts show the localized reason, and a subagent denial reads "Auto review denied; not executed". Picking it in the picker first shows a risk confirmation (`Enter` enables, `Esc` goes back; in fullscreen its Enable / Go back rows are clickable); a typed `/permission auto` switches directly. Once the current session has selected it, the picker skips the confirmation and Shift+Tab stops skipping it.
 
 **Upstream auto-retry** (DSH): whenever a session binds (boot, `/model` switch, resume), the TUI seeds a retry policy — 5 attempts, transport-drop-aware failure codes including `STREAM_CLOSED` (a dropped upstream stream) — on **the provider route that session actually uses**, through the official `llm-pi-ai` settings section (the policy the kernel's `llm-retry` plugin executes). Only routes without an explicit `retryPolicy` are seeded — dormant channels are never written — and `upstreamRetry: false` in cordis.yml opts out.
 

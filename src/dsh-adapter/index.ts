@@ -190,7 +190,8 @@ export interface Config {
   smoothStreaming?: boolean
   /** Successful task notifications: off, unfocused (default), or always. */
   taskNotifications?: TaskNotifications
-  /** Terminal notification transport: auto (default), OSC 9, or BEL. */
+  /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
+   *  toast, which off Windows resolves back to the probed terminal protocol. */
   notificationMethod?: NotificationMethod
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,
@@ -368,7 +369,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
   taskNotifications: Schema.union(['off', 'unfocused', 'always']),
-  notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
+  notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
   mermaidDiagrams: Schema.boolean().default(true),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
@@ -404,6 +405,8 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
+    pluginFields: Schema.boolean().default(DEFAULT_STATUS_BAR.pluginFields),
+    pluginFieldsOrder: Schema.string().default(DEFAULT_STATUS_BAR.pluginFieldsOrder),
   }).default({ ...DEFAULT_STATUS_BAR }),
   // Side-panel preferences, same shape as statusBar: every member carries a
   // default so an unset cordis.yml block and a partially hand-written one
@@ -530,9 +533,9 @@ function attachToEntry(ctx: Context, config: RuntimeConfig<Config>): void {
 // (scripts/verify-public-config-types.mjs compiles a real consumer file against
 // the published declarations), and from here on it may only grow — removing any
 // of it is a breaking change. What is NOT here: the registry, the loader and the
-// picker. Those stay the host's, and the stage C install chain is where a mounted
-// bundle's declaration reaches them (the admission chain itself is wired; see
-// docs/plugins.md).
+// picker. Those stay the host's; an installed bundle's declaration reaches them
+// through the boot-time assembly (`backend-assembly.ts`, D-1) on top of the W-2
+// admission chain (see docs/plugins.md).
 export {
   BACKEND,
   BACKEND_CAPABILITY_NAMES,

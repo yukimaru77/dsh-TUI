@@ -5,6 +5,11 @@
 packages, its user patch and the home patch on every launch. There is no
 copied TUI backend manifest to synchronize.
 
+The upstream automation commands (`run`, `-p`, `cli`, `session`, `models`,
+`skills`, `mcp`, `auth`, `capabilities` and `dsh`) go directly to the separate
+CLI with their original arguments. They retain upstream's headless profile
+default and do not receive the terminal overlay; see [CLI](cli.en.md).
+
 The overlay adds terminal UI services, replaces Web's argument parser and
 uses a private loopback port so the normal Web server on port 3080 keeps
 running. It does not open a browser. Web's host plugins, including KB,

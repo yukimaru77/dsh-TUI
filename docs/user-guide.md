@@ -215,6 +215,7 @@ dsh-tui
 
 **/settings 设置面板**
 `↑/↓` 移动 · `Enter` 展开/切换/编辑 · `←/→` 在**有选项的字段**上循环切换（布尔项仍只响应 `Enter`）·
+`Tab` / `Shift+Tab` 或点击页签（全屏模式）切换**页**（「常规」+ 插件声明的页；只有一页时不显示页签）·
 改动自动保存，`Esc` 退出
 
 **/btw 侧问面板**
@@ -305,7 +306,7 @@ dsh-tui
 | `/home` / `/agentview` / `/bg` | 无 | 同一个会话管理界面（`/home`=工作区视角 · `/agentview`=托管会话状态 · `/bg`=转后台并打开，别名 `/background`） |
 | `/tree` | 无 | 会话分叉树：悬停预览、点击回退 / 分叉 / 切换分支 |
 | `/fork` | 无 | 把当前会话复制成可恢复的副本（原会话不受影响） |
-| `/restart` | 无 | 重启进程并恢复本会话（回合运行中会被拒绝，先 `Ctrl+C`） |
+| `/restart` | 无 | 重启进程并恢复本会话。回合运行中也可用：会中断该回合且不保留排队输入；若工具不响应中断、进程无法正常收尾，约 5 秒后退出并打印恢复本会话的命令 |
 | `/kernel` | 无 | 内核选择器：在 DSH、Codex 与实验性的 Claude 后端之间切换，记住选择并重启进入新会话（回合运行中会被拒绝）；见 [Claude 后端](claude-backend.md) |
 | `/dsh` / `/codex` / `/claude` | 无 | 直接选择对应内核，检查与重启流程同 `/kernel`；选择当前内核不重启，回合运行中不能切换，未安装 Claude 时进入安装向导 |
 | `/rename` | `<新名称>` | 重命名当前会话（无参时显示当前标题与用法） |
@@ -332,7 +333,7 @@ dsh-tui
 | `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
 | `/agents` | 无 | 本会话子代理列表 |
-| `/team` | `status`（默认）/ `on` / `off` | 实验性 Agent Teams 的开关：启停团队 bundle，有热重载时立即生效；`status` 报告 bundle、服务与本会话 teammate |
+| `/team` | `status`（默认） | 实验性 Agent Teams 的状态报告；只在团队服务运行后出现在帮助与 `/` 补全里，报告 bundle、服务与本会话 teammate。开关改用 `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile`（服务未运行时手敲 `/team` 会给出开启提示） |
 | `/jobs` | 无 | 后台任务面板：状态/运行时长/退出码实时跟踪，`↑/↓` 选择、`k` 停止；面板打开时 `Esc` **只关面板**不打断回合（想中断先关面板再 `Ctrl+C`） |
 | `/settings` | 无 | 打开插件设置编辑器（命名空间读取/编辑） |
 | `/setup` | 无 | 重跑首次引导向导（API Key / 语言主题 / 模型工作区 / 快捷键），与首次启动是同一个界面 |
@@ -368,7 +369,7 @@ dsh-tui
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
 | `/skills` | 无 | 技能目录选择器（名称+来源+简述），Enter 将可直调技能以 `/name ` 填回输入行 |
-| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含安装自带），并给详情 / 卸载 / 启用 / 关闭的指引；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
+| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含其他安装自带；本应用已适配、默认关闭的实验性功能单独列出并给开启/用法）；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
 | `/update` | 无 | 更新 TUI 并自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝） |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
 
@@ -541,9 +542,11 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
   cost（`≈¥0.05 谷`，**本会话估算**：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；
   hover 拆「主会话 ¥ / 子代理 ¥ / 未计价 N tok」；非官方/未收录模型只显示 token 并标注未计价；
   **估算是参考，以平台账单为准**）
-- 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
+- 右组：git 分支（**跟随工作树 HEAD**——别处切分支约 1 秒内反映到界面，detached HEAD 时清空）→ 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
-- 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、contextBar。
+- **插件底栏字段**：插件可通过 `ctx.tuiStatus.setField` 贡献字段（三槽：左组末尾 / 右组开头 / 右组末尾，可选 hover 详情与全屏点击）；`statusBar.pluginFields`（默认开）可一次关掉全部插件字段，关闭不会卸载插件。
+- **逐字段启停与排序**：`/settings → Status bar → 插件底栏字段名单`（`statusBar.pluginFieldsOrder`）把字段按三槽分组列出，逐条勾选，并用底部「高级」行调整顺序。值形如 `build,ci;git;pet`——恰好三组（`;` 分隔），组序号即槽位、组内顺序即显示顺序；列进名单的字段跟随所在组（覆盖插件声明的槽）。留空 = 一个都不显示；`*`（默认）= 全部（含以后注册的字段，按声明槽与注册序）。从 `*` 进入高级行编辑会预填三组骨架，原样保存不改变模式；名单固定后新注册的字段默认不出现，需要勾选。
+- 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、contextBar、pluginFields。
 - 默认关：tokens、tps、gitBranch、sessionTitle、sessionId、mode、activity、trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
@@ -574,7 +577,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | whaleIdle | 鲸鱼娘欢迎期闲置动画（默认开）：定格后摆鱼鳍/拍尾巴/眨眼，空闲 10 秒入睡冒 Z；点击冒爱心。开始第一个任务后定格 |
 | splashFont | 开屏大字字体：按天轮换（默认，随本地日期换款）/ 加粗 / 方角实心 / 半立体 / 宽体 / 点阵灰度 / 镂空模板 / 细笔 / 方板。选某一款即固定那一款，选回「按天轮换」恢复。立即生效 |
 | whaleGirl | 女仆娘立绘（默认关）：DeepSeek 品牌下，设 `companion.skin=whale` 并开启本项；`deepy` 和 `whaleGirl` 皮肤会取代立绘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。优先 Kitty/Sixel 真图，不支持时回落字符画。见[优先级表](configuration.md) |
-| diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
+| diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified；双栏（auto 在 ≥110 列，或显式 split）折叠时仍一行一条，超宽行会被截断，卡片末尾给一行 `… 已折叠 N 字符（ctrl+o 展开）` 提示；展开（`Ctrl+O` 或点击卡片）后超宽行按各自栏宽换行，两栏仍逐行对齐（同一改动行左右同起点） |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | btw.contextBudget | `/btw` 追问携带的最近问答总字符预算（默认 24000，范围 1000-200000）；超出时从最旧的整组开始裁剪。立即生效 |
 | btw.contextTurns | `/btw` 追问显式携带的最近完成问答组数（默认 4，范围 1-8）；窗口外的问答不进入请求，线程与面板仍保留全文。立即生效 |
@@ -590,7 +593,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
 
 **effortDefault**：模型没有该档时自动就近降级并弹提示；优先级 settings 用户层 > 上次 `/effort`
 （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。
@@ -687,7 +690,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 11. 上下文压力 ≥80% 变琥珀、≥95% 转红——该 `/compact` 了（minimal 预设不可用）。
 12. 会话管理界面（`/resume`、`/home`、`/agentview`、`/bg` 或输入框行首 `⌸`）：
     打字筛选、`★` 固定、`Ctrl+X` 停后台会话；切换只是**停放**。
-13. 回合运行中 `/compact`、`/model`、`/restart` 会被拒绝——先 `Ctrl+C` 或等回合结束。
+13. 回合运行中 `/compact`、`/model` 会被拒绝——先 `Ctrl+C` 或等回合结束。`/restart` 不受此门禁：它会中断当前回合（不保留排队输入）并重启；若 Esc/Ctrl+C 长时间无法终止（工具没有响应中断），进程会在约 5 秒后退出并打印恢复本会话的命令，按提示重新进入即可。
 14. `/model` 在同一会话内切换后续请求的模型（ID 和历史保留）；选择保存为新会话默认，恢复的会话沿用其最后一次请求的路由。
 
 **问手册**

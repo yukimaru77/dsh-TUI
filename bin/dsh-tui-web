@@ -1,6 +1,12 @@
 #!/bin/sh
 # Same live Web profile and installed plugins; terminal presentation only.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Automation has its own headless profile and must not receive the UI overlay.
+case "${1-}" in
+  cli|run|-p|--print|session|models|skills|mcp|auth|capabilities|dsh)
+    exec /opt/homebrew/bin/node "$root/cli/entry.mjs" "$@"
+    ;;
+esac
 export DSH_TUI_NO_DELEGATE=1
 export DSH_TUI_HOST_ENTRY=0
 export DSH_TUI_BACKEND=dsh

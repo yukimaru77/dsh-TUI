@@ -4,6 +4,10 @@
 `cordis.web-ui.patch.yml`。每次启动直接读取 Web profile 的 bundle、安装包、
 用户补丁和 home 补丁，没有另一份需要同步的 TUI 后端配置。
 
+上游自动化命令（`run`、`-p`、`cli`、`session`、`models`、`skills`、`mcp`、
+`auth`、`capabilities`、`dsh`）保留原参数，直接进入独立 CLI，沿用上游
+默认的 headless profile，不叠加终端 UI。详见 [CLI](cli.md)。
+
 覆盖层只增加终端 UI 服务、替换 Web 命令行解析器，并使用独立的 loopback
 动态端口，让原来的 3080 Web 服务继续运行，不自动打开浏览器。KB、Pi
 兼容、SSH、LiveVoice 等仍是 Web 的同一份安装包；LiveVoice 的麦克风和

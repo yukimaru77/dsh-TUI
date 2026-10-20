@@ -29,7 +29,7 @@
 - **原生光标** — 聚焦的文本输入框继承终端的光标形状、颜色、闪烁及已启用的动画或拖尾效果，inline 与 fullscreen 均支持。`/model` 选择器在提供商标签、模型行和推理档位之间移动时显示同样的光标，停稳 **0.5 秒后隐藏**；区域被裁剪时回落到模型行。会话管理界面也会在工作区栏、会话行与搜索框之间移动原生光标；输入时移到搜索框，导航时回到聚焦行。动画与拖尾效果在终端设置中配置。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。Kitty 图片按预留格子的物理像素缩放，适配 HiDPI 终端。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
-- **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
+- **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`、`windows`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。在本地 Windows 上，`auto` 解析为 `windows`，即系统原生通知：任务完成时弹出 toast；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；DSH 会话所在运行中 profile 的外部 DSH 通知插件已启用且处于 active 时，dsh-TUI 让位（不弹也不响）；仅安装但已禁用的插件不会吞掉提醒；注册写不进去时回落到响铃，不会静默。SSH 会话的 `auto` 保留所连接终端的通知协议；显式 `windows` 仍选择运行主机的原生通知。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。
@@ -37,6 +37,7 @@
   上下文条的填充长度跟随后端占用量，颜色按内容构成估算；压缩后清理过期估算，缺少分类时显示单块已用区域，条和 ctx 字段的悬停明细都报实测已用量。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
+  `/btw` 在侧栏无法显示时回退到浮层；主任务问卷与全屏草稿编辑器优先接管，侧问与草稿保持原样。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
 - **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。
@@ -84,6 +85,12 @@
 
 ## 快速开始
 
+### Windows 一键安装（x64）
+
+从 [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) 下载 `dsh-tui-setup-win-x64.exe` 双击运行。免管理员、全离线，也无需预先装 Node 或 DSH。
+
+### 命令行安装
+
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
 主适配目标为 DSH `0.2.1-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
@@ -92,6 +99,9 @@ profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置�
 DSH rc.2 下还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
 分区支持自定义 Loader 行 ID，可直接输入 API key，密钥以掩码显示并保存到 DSH 凭据库。
 官方 Flash 模型显示 `1017` 发布标记，模型 ID 仍为 `deepseek-flash`。
+
+`/settings` 按页签组织：TUI 自己的设置位于「常规」页，插件声明的页单独成签
+（`Tab` / `Shift+Tab` 或全屏下点击页签切换；只有一页时不显示页签）。
 
 DSH 0.1.7 的 `/settings` 使用 TUI 实际的 Loader 行 ID，也支持自定义 ID。
 profile 依赖须配套，包含 `@deepseek-ai/schemastery` 3.18.3 或更新版本；
@@ -113,11 +123,17 @@ dst
 
 手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
 
-> **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台的 `@img/sharp-*` 原生包，省约 200MB 下载。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
+> **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
 TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键升级，自动重启并恢复当前会话。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
 ### CLI 子命令
+
+自动化入口：`dst -p "任务"`、`dst run --json`、`dst session list --json`。
+独立引擎不加载 TUI，也不继承其 profile/偏好；执行与查询仍由官方 DSH
+headless/服务拥有（当前验证 0.2.0-rc.2 与 0.2.1-rc.2）。`dst cli --help` 查看全部命令，
+`dst dsh <参数...>` 原样转交官方。协议、限制、会话恢复边界与
+Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -156,7 +172,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
 
-**VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
+**VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。**任意终端**：dsh-tui 经 pty 用 [OSC 7501（Program Status Protocol）](https://www.superlogical.com/rex/docs/build/program-status) 报告 `idle` / `working` / `blocked` / `done` / `error`，实现了该协议的终端与 agent 收件箱可据此显示会话在做什么；未实现的终端会忽略该序列。设 `DSH_TUI_PROGRAM_STATUS=0` 可关闭。
 
 裸 `--resume`（`-c`、`--continue`）恢复本次启动所选后端自己的上次会话。
 启动恢复只针对所选后端：该后端没有上次会话，或派生出来的目标不属于最终启动的后端
@@ -239,25 +255,25 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 ### 实验性：DSH Agent Teams
 
 DSH 的实验性 Agent Teams 让会话的主 agent（Lead）创建有名字的 teammate：它们共用
-工作目录、互相发消息，并在一块共享任务板上协作。默认关闭。先把上游 bundle 装进 TUI
-profile（一次即可）：
+工作目录、互相发消息，并在一块共享任务板上协作。它随 dsh 安装分发、默认关闭，
+`/plugin list` 会列出它。开启：
 
 ```sh
-dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@0.2.1-rc.2
+/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
 ```
 
-之后用 `/team on` / `/team off` 开关（单独 `/team` 报告 bundle、服务与本会话的
-teammate）。开关就是在 profile 里启停这个 bundle，重启后保持；`dsh --profile` 启动时
-立即生效，运行中的会话也跟着变，模型会收到工具增减的通知。有 teammate 在运行时关闭
-会先确认，关闭会停止它们：团队服务卸载时释放仍在运行的 teammate。在 teammate 会话里
-看不到其他 teammate 的运行状态，确认按「可能在运行」计数。团队记录留在会话里，
-下次 `/team on` 时恢复。对这个 bundle 用 `/plugin enable|disable` 效果相同。
+开关就是在 profile 里启停这个 bundle，重启后保持；`dsh --profile` 启动时立即生效，
+运行中的会话也跟着变，模型会收到工具增减的通知。团队服务挂载后，`/team` 才会出现在
+帮助与 `/` 补全里，而且只报告状态：`/team`（或 `/team status`）给出 bundle、服务与
+本会话 teammate。`/team on|off` 已移除，输入会提示改用 `/plugin enable|disable`。
+有 teammate 在运行时关闭会先确认，关闭会停止它们：团队服务卸载时释放仍在运行的
+teammate。在 teammate 会话里看不到其他 teammate 的运行状态，确认按「可能在运行」
+计数。团队记录留在会话里，再次开启时恢复。
 
-版本必须钉住，与你已装的 DSH 版本完全一致（上面以主适配线 `0.2.1-rc.2` 为例；
-DSH `0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2` 就装同版本的 `…-profile`）：团队包与 DSH 同步发版、对 DSH 的 peer
-是精确版本，不带版本和 `next` 都装不上。`/team on` 在包没装时给出的命令按已装 DSH 的
-版本填写（限上述版本线，读不到版本时给 `0.2.1-rc.2`）；其他 DSH 版本装不上团队 bundle，
-会提示先把 DSH 换到上述版本线之一。
+如果运行中的 DSH 不自带这个包（`/plugin list` 不显示它），先把 DSH 换到支持团队包的
+版本线（`0.2.1-rc.2`、`0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2`）；需要显式装进
+profile 时用 `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<你的 DSH 版本>`——团队包与 DSH
+同步发版、对 DSH 的 peer 是精确版本，版本必须完全一致。
 
 请求里有 `spawn_teammate` 时，dsh-TUI 从中去掉 `subagent` / `subagent_fork`，团队的
 `send_message` / `list_agents` / `interrupt_agent` / `wait_agent` 顶替同名的旧版控件：
@@ -327,6 +343,7 @@ teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行�
 在 `/provider` 模型列表聚焦一项并按 `Tab`，可编辑上下文窗口、最大输出 token、推理档位和图片输入能力。
 
 会话管理界面默认聚焦当前工作区最近使用的会话；没有历史时聚焦“新建会话”卡片，按 `←` 可移到工作区栏。同一工作区左右切栏或鼠标移入列表会保留会话选择；换工作区时选中该工作区最新的会话，返回之前的工作区时也重新选最新会话，不记忆各工作区的旧选择。DST 启动后会在后台预加载会话列表，成功后更新缓存。界面会立即显示上次成功读取的列表；如果后台读取仍在进行，打开 `/resume` 会复用该请求，并接收已经返回的结果。DSH、Claude 和 Codex 的首屏快照都可跨重启复用，并按内核与存储目录隔离。无论是否有快照，三种后端都优先加载当前工作区，再补齐其他工作区；新返回的会话和标题会立即合并到列表，其他工作区的缓存保留到完整读取结束。后台更新不会改变用户已经手动选择的会话。Claude 和 Codex 按各自原生的 cwd 范围先请求最近的最多 32 条会话：Claude 的 SDK 默认包含同仓库 Git worktree，Codex 则精确匹配会话 cwd。Codex 列表复用已启动的连接，数据库快读与常规读取的首批 32 条并行进行，后续再分页补齐。界面仍按会话自身 cwd 分组。DSH 先解析当前工作区的元数据，即使不足 32 条，也会在读取其他工作区日志前显示；需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
+会话管理界面在来源标签下方统一显示当前工作区的绝对路径（必要时换行；极长路径可悬停查看）；会话行只保留标题与关键状态、时间，不再重复目录。DSH 的大小和模型仍可在标题悬停提示中查看。
 使用 DSH 当前的 JSONL 后端时，启动与 `/new` 的初始权限事件只保留在内存中；后续会话活动才会保存完整日志，只有初始化的会话不会因显式持久化 flush 而落盘。尚未落盘的空会话重启时会重新创建。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。
 「仅历史」目录只提供编辑和新建会话操作；重命名与移除仅适用于已登记工作区。
@@ -414,6 +431,8 @@ pnpm smoke
 
 这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件），卸载也不会删你自己的数据：`~/.dsh-tui` 下还剩什么只报告一次，删不删由你决定。
 
+`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队与自动授权审查），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
+
 ## 文档索引
 
 - **上手** — [安装与快速开始](docs/getting-started.md) · [VS Code](docs/vscode.md)
@@ -445,7 +464,7 @@ pnpm smoke
 
 **权限记忆**（三个内核都有）：Claude 与 Codex 后端把 `/permission` 选择存在 `~/.dsh-tui/backends/<id>/prefs.json`；DSH 的选择存在 `~/.dsh-tui/permission.json`。任何一次持久的预设切换（选择器、手敲 `/permission`、Shift+Tab 静态模式、官方命令自行完成的切换）都会更新记忆；从未自定义过权限面的会话将以上次的选择启动——同样走官方切换路径。这里的"未自定义"以用户动作为准：合成层会在每个新会话创建时写入自己的默认预设，那些事件不算用户选择。计划模式的临时切换与实验性的自动授权审查（见下）不记入；`DSH_PERMISSION_MODE` 是本次启动的初始权限面，显式设置时优先于该文件；名册已不提供的身份会被跳过。
 
-**自动授权审查**（DSH，实验性）：启用 `dsh-experimental-auto-review` 插件后，`auto` 预设（显示为「自动授权审查」，带 `EXP` 标记）即时出现在 `/permission` 及其补全里，移除插件后即时消失。它只对当前会话生效：模型在每次工具调用执行前审查，没有文件沙箱，每次调用额外一次模型请求；其审批显示本地化原因，子代理中的拒绝显示为「自动授权审查拒绝，未执行」。在选择器里选中它会先出风险确认（`Enter` 启用，`Esc` 返回；全屏下「启用 / 返回」两行可点击）；手敲 `/permission auto` 直接切换。当前会话选过它一次之后，选择器不再弹确认，Shift+Tab 也不再跳过它。
+**自动授权审查**（DSH，实验性）：`/plugin list` 会列出它；用 `/plugin enable @deepseek-ai/dsh-experimental-auto-review` 开启后，`auto` 预设（显示为「自动授权审查」，带 `EXP` 标记）即时出现在 `/permission` 及其补全里，移除插件后即时消失。它只对当前会话生效：模型在每次工具调用执行前审查，没有文件沙箱，每次调用额外一次模型请求；其审批显示本地化原因，子代理中的拒绝显示为「自动授权审查拒绝，未执行」。在选择器里选中它会先出风险确认（`Enter` 启用，`Esc` 返回；全屏下「启用 / 返回」两行可点击）；手敲 `/permission auto` 直接切换。当前会话选过它一次之后，选择器不再弹确认，Shift+Tab 也不再跳过它。
 
 **上游断链自动重试**（DSH）：会话每次绑定（启动、`/model` 切换、resume）时，只为**当前实际使用的渠道**播种一份重试策略——最多重试 5 次、失败码覆盖传输类中断（含 `STREAM_CLOSED`，即上游流被掐断）——写入官方 `llm-pi-ai` settings 分节（内核 `llm-retry` 插件执行的就是这份策略）。只补未声明 `retryPolicy` 的渠道、从不写闲置渠道；已显式声明的不会被覆盖；cordis.yml 里 `upstreamRetry: false` 可整体关闭。
 

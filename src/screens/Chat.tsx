@@ -10,7 +10,7 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { resolveBrand, setActiveBrand } from '../branding.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Image, Text, InputCaret, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, InputCaret, useInput, useApp, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
@@ -59,6 +59,8 @@ import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { useProgramStatus, type ProgramBlockedPrompt } from '../ink/hooks/use-program-status.js'
+import { supportsProgramStatus } from '../ink/termio/osc7501.js'
 import { useCopyOnSelect } from '../ink/hooks/use-copy-on-select.js'
 import { useSelection } from '../ink/hooks/use-selection.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
@@ -127,7 +129,7 @@ import { PluginManagePane } from '../components/PluginManagePane.js'
 import type { SdkInstaller, SdkInstallSurface } from '../agent/backend.js'
 import type { PluginInstallFlow, PluginInstallSink, PluginInstallStep } from '../dsh-adapter/plugin-install.js'
 import type { PluginManageFlow, PluginManageSink, PluginManageStep } from '../dsh-adapter/plugin-manage.js'
-import type { TeamCommandOutcome, TeamCommandSink } from '../dsh-adapter/team-mode.js'
+import type { TeamCommandSink } from '../dsh-adapter/team-mode.js'
 import { teamMemberCounts } from '../components/teamRoster.js'
 import { usePluginWriteFlow } from './chat/usePluginWriteFlow.js'
 import { ChannelPicker } from '../components/ChannelPicker.js'
@@ -235,6 +237,16 @@ const LOCAL_BLOCK_CELLS = 4000
  *  file, but a healthy import of thousands of conversations finishes well
  *  inside this; without a cap a wedged child would hang the loop forever. */
 const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
+
+/**
+ * How long an interrupt may stay unconverged before the TUI says so. A normal
+ * abort ends the turn in well under a second; a tool that ignores its
+ * `AbortSignal` keeps the agent loop waiting forever (dsh-agent-loop awaits
+ * every dispatched tool on abort), so `working`/`cancelPending` never clear.
+ * The notice names `/restart` as the recovery hatch; this only ends the silent
+ * dead end in which every key seemed to do nothing.
+ */
+const INTERRUPT_STUCK_MS = 10_000
 /**
  * 落地页参数行四段能点开的既有选择器（第五版）：模型 → /model、思考深度 →
  * /effort、模式 → /plan、权限预设 → /permission。盖在落地页之上时键盘归
@@ -520,11 +532,11 @@ export function Chat({
    */
   onPluginManage?: (args: string, sink: PluginManageSink) => PluginManageFlow | undefined
   /**
-   * `/team [status] | on | off`, wired to `createTeamCommandEntry`: on/off
-   * hand back a lifecycle flow on the Agent Teams bundle (same pane as
-   * `/plugin`), status a report. `undefined` on a backend without it.
+   * `/team [status]`, wired to `createTeamCommandEntry`: a report, or the
+   * enable/migration hint when the team service is not mounted. `undefined`
+   * on a backend without it.
    */
-  onTeamCommand?: (args: string, sink: TeamCommandSink) => TeamCommandOutcome
+  onTeamCommand?: (args: string, sink: TeamCommandSink) => Promise<readonly string[]>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -607,8 +619,9 @@ export function Chat({
   // the process (beta.3; the reveal-store half was PR #680, this is the
   // channel half — the surviving source on Windows timer granularity).
   useExternalVersion(channel.subscribe, () => channel.version)
-  // Re-render on language switches so the whole UI hot-swaps its strings.
-  React.useSyncExternalStore(subscribeLang, getLang)
+  // Re-render on language switches so the whole UI hot-swaps its strings; the
+  // value itself is what memoized strings key their language dependency on.
+  const lang = React.useSyncExternalStore(subscribeLang, getLang)
   const promptEditorOpen = usePromptEditorOpen()
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
@@ -659,6 +672,21 @@ export function Chat({
     subscribeStatus,
     () => statusContributions.getViewSnapshot(),
   )
+  // Plugin footer fields (tuiStatus.setField): same subscription/store as the
+  // text line, own snapshot — a mutation rebuilds only the affected list.
+  const statusFields = React.useSyncExternalStore(
+    subscribeStatus,
+    () => statusContributions.getFieldSnapshot(),
+  )
+  // A plugin's footer-field click that threw is logged by the service; the
+  // user-facing signal is a toast naming the key (same shape as the shortcut
+  // handler above). The service never lets the throw reach the renderer.
+  React.useEffect(() => {
+    statusContributions.setFieldErrorHandler(key => {
+      channel.notify(t('ext-status-field-failed', { key }), { color: 'error', timeoutMs: 4000 })
+    })
+    return () => statusContributions.setFieldErrorHandler(undefined)
+  }, [statusContributions, channel])
   // Shortcut handler failures surface as toasts (the registry also logs
   // them); the hook is re-pointed on every mount so a stale closure never
   // outlives its channel.
@@ -1070,6 +1098,10 @@ export function Chat({
       runSdkInstall(dir)
     })
   }
+  /** `/plugin` reports keep section indentation and blank rows. */
+  const pushPluginLocal = (lines: readonly string[]): void => {
+    channel.pushLocal('/plugin', lines, { preserveWhitespace: true })
+  }
   /**
    * `/plugin install <spec>` 的步骤态（C-4）。六件套（ref / state / 收尾 / 结算 /
    * 栅栏 / 起步）与 manage 侧共用 `usePluginWriteFlow`，两处的差异只有「关浮层
@@ -1079,7 +1111,7 @@ export function Chat({
     overlayKind: 'plugin-install',
     overlay,
     dispatchOverlay,
-    pushLocal: lines => channel.pushLocal('/plugin', lines),
+    pushLocal: pushPluginLocal,
     initialStep: { kind: 'done' },
     // 装了半截就关浮层会把 profile 留在半装状态：取消由服务自己结算（回滚）。
     cancelOnClose: flow => flow.cancel(),
@@ -1091,7 +1123,7 @@ export function Chat({
       binding: () => channel.agentBindingGeneration,
       // 回合运行中改 profile 会触发应用／HMR：门禁在流程里（inspect 之前与写入之前各查一次）。
       busy: () => channel.working,
-      onLines: lines => channel.pushLocal('/plugin', lines),
+      onLines: pushPluginLocal,
     })
     if (flow === undefined) return false
     pluginInstall.start(flow, flow.begin())
@@ -1117,7 +1149,7 @@ export function Chat({
     overlayKind: 'plugin-manage',
     overlay,
     dispatchOverlay,
-    pushLocal: lines => channel.pushLocal('/plugin', lines),
+    pushLocal: pushPluginLocal,
     initialStep: { kind: 'done' },
     failureLine: error => t('plugins-manage-failed', { reason: cleanScalarText(error, COMMAND_RESULT_CELLS) }),
   })
@@ -1132,7 +1164,7 @@ export function Chat({
       binding: () => channel.agentBindingGeneration,
       // 回合运行中改 profile 会触发应用／HMR：门禁在流程里（解析之前与写入之前各查一次）。
       busy: () => channel.working,
-      onLines: lines => channel.pushLocal('/plugin', lines),
+      onLines: pushPluginLocal,
       teamActiveMembers: teamMembers,
     })
     if (flow === undefined) return false
@@ -1436,10 +1468,11 @@ export function Chat({
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
   /** /btw side-question thread: pure UI state in btwThreads — the answers
-   *  never enter the transcript or the session log. The floating overlay is
-   *  only the FALLBACK surface (btw panel not enabled); with the panel
-   *  enabled the same thread routes to the sidebar instead — one answer,
-   *  exactly one surface. */
+   *  never enter the transcript or the session log. Two surfaces, one owner:
+   *  the sidebar panel when the split can render AND is showing the btw
+   *  panel, otherwise the floating overlay in the conversation. This flag
+   *  records that the fallback is wanted; `btwOverlayVisible` decides whether
+   *  it actually owns the screen. */
   const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
   /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
   const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
@@ -2339,6 +2372,9 @@ export function Chat({
   // `✦` otherwise. dsh-TUI brands the idle prefix with the DeepSeek whale.
   const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
+  // Gate the stream this app renders to; embedders may replace process.stdout.
+  const { stdout: appStdout } = useApp()
+  const programStatusEnabled = React.useMemo(() => supportsProgramStatus(appStdout.isTTY === true), [appStdout])
   // Mouse text selection auto-copy: active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
@@ -2408,6 +2444,40 @@ export function Chat({
   useTerminalTitle(
     `${titlePrefix} 🐋 ${channel.sessionTitle}`,
   )
+
+  // OSC 7501 program status: tell the terminal (and any agentic inbox) whether
+  // this session is working, parked on the user, or finished. Precedence
+  // matches the UI's own: a parked ask outranks a running turn. The pending
+  // prompt is reduced to the one-line message the protocol carries.
+  const programStatusBlocked = React.useMemo<ProgramBlockedPrompt | null>(() => {
+    if (approvalSnapshot !== null) {
+      const detail = approvalSnapshot.command ?? approvalSnapshot.reason ?? approvalSnapshot.title
+      return {
+        kind: 'permission',
+        message: t('program-status-approval', {
+          tool: detail === undefined
+            ? approvalSnapshot.toolName
+            : `${approvalSnapshot.toolName} · ${detail}`,
+        }),
+      }
+    }
+    if (dialogSnapshot !== null) {
+      return { kind: 'question', message: t('program-status-dialog', { title: dialogSnapshot.title }) }
+    }
+    if (questionSnapshot !== null) {
+      const { header, question, purpose } = questionSnapshot.question
+      return { kind: purpose === 'auth' ? 'auth' : 'question', message: t('program-status-question', { question: header ?? question }) }
+    }
+    return null
+  }, [approvalSnapshot, dialogSnapshot, questionSnapshot, lang])
+  // The hook reads the channel's own projected fields (`working`,
+  // `turnOutcome` from `turn.end.reason`, the title and the session id), so
+  // the usage ledger's stale outcome can never stand in for the turn's close.
+  useProgramStatus({
+    channel,
+    blocked: programStatusBlocked,
+    enabled: programStatusEnabled,
+  })
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
     workspaceFlowAbortRef.current = null
@@ -3724,30 +3794,20 @@ export function Chat({
         const originAgentBinding = channel.agentBindingGeneration
         void channel.pluginsInfo(rawInput).then((lines) => {
           if (channel.agentBindingGeneration !== originAgentBinding) return
-          channel.pushLocal('/plugin', lines)
+          pushPluginLocal(lines)
         })
         return true
       }
       case 'team': {
-        // `/team` 是团队 bundle 的启停（team-mode.ts）：on/off 走与 /plugin 同一个
-        // 生命周期流程与确认浮层，status 是一段报告；都按发起时的绑定落行。
+        // `/team` 只报告团队状态（team-mode.ts）；开关是 /plugin enable|disable。
+        // 服务未挂载时这一行不在命令表里，但手敲仍会走到这里，拿回开启提示。
         setHelpOpen(false)
         if (onTeamCommand === undefined) {
           channel.pushLocal('/team', [t('team-cmd-unavailable')])
           return true
         }
         const originAgentBinding = channel.agentBindingGeneration
-        const outcome = onTeamCommand(rawInput, {
-          binding: () => channel.agentBindingGeneration,
-          busy: () => channel.working,
-          onLines: lines => channel.pushLocal('/team', lines),
-          members: teamMembers,
-        })
-        if (outcome.kind === 'flow') {
-          pluginManage.start(outcome.flow, outcome.flow.begin())
-          return true
-        }
-        void outcome.lines.then((lines) => {
+        void onTeamCommand(rawInput, { members: teamMembers }).then((lines) => {
           if (channel.agentBindingGeneration !== originAgentBinding) return
           channel.pushLocal('/team', [...lines])
         }, (error: unknown) => {
@@ -4171,13 +4231,21 @@ export function Chat({
         // (cordis.yml root config, frozen fullscreen layout, newly built
         // code), so /restart respawns the process with the original argv and
         // resumes this session — the /update handoff minus the pnpm step.
+        // Allowed mid-turn on purpose: a turn whose abort never converges
+        // (a tool ignoring its AbortSignal) can leave `working` true forever,
+        // and refusing the one command that can rebuild the process would
+        // leave the user with no way out. The handoff notice written by the
+        // exit funnel owns the visible copy (and says what the restart
+        // interrupts); this toast only covers embedders whose onRestart does
+        // not tear the screen down.
         setHelpOpen(false)
         if (onRestart === undefined) {
           channel.notify(t('restart-unavailable'), { color: 'warning' })
-        } else if (channel.working) {
-          channel.notify(t(WORKING_GATE_NOTICES.restart), { color: 'warning' })
         } else {
-          channel.notify(t('restart-starting'))
+          channel.notify(
+            t(channel.working ? 'restart-during-turn' : 'restart-starting'),
+            channel.working ? { color: 'warning', timeoutMs: 6_000 } : undefined,
+          )
           onRestart()
         }
         return true
@@ -4228,9 +4296,12 @@ export function Chat({
       }
       case 'btw': {
         // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
-        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。启用了
-        // btw 面板就进面板线程（有模态界面时不抢开，只标未读）；没启用
-        // 就用浮层。同一个问答只出现在一处。
+        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。分栏
+        // 渲染得出来才进面板线程；否则退浮层——面板「已启用」只是配置，
+        // 不代表分栏真的上屏（窄屏 / inline / 编辑器展开 /
+        // splitEnabled=false 都会把它掩掉，issue #1631）。屏被别的浮层或
+        // 整屏界面占着时两个表面都不抢开，只发通知。同一个问答只出现在
+        // 一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
@@ -4242,10 +4313,15 @@ export function Chat({
           channel.notify(t('btw-thread-busy'), { color: 'warning', timeoutMs: 3000 })
           return true
         }
-        if (sidePanel.enabledPanelIds.includes('btw')) {
-          if (btwSurfaceFree()) sidePanel.openPanel('btw')
+        const btwPanelEnabled = sidePanel.enabledPanelIds.includes('btw')
+        if (btwSurfaceFree()) {
+          if (btwPanelEnabled && sidePanel.splitAvailable) sidePanel.openPanel('btw')
+          else setBtwOverlayOpen(true)
         } else {
-          setBtwOverlayOpen(true)
+          // 屏被别的浮层/整屏界面占着：侧问照常发出，但只在通知通道里说一
+          // 句——既不把答案静默塞进看不见的地方，也不挂一个既看不见、又
+          // 会先吃掉按键的浮层。
+          channel.notify(t('btw-surface-busy'), { color: 'warning', timeoutMs: 4000 })
         }
         return true
       }
@@ -4403,6 +4479,25 @@ export function Chat({
     fullscreen: fullscreen && !launchpadShown,
     editorOpen: promptEditorOpen,
   })
+  /**
+   * 「面板上屏」不等于「分栏在渲染」：分栏画出的是 activePanelId 那一块，
+   * 而活动面板默认是启用列表第一项。浮层只在侧栏真的显示 btw 线程时让位；
+   * 侧栏停在别的面板上时把浮层卸掉，等于让用户什么都看不到（issue #1631
+   * 的同一条静默路径）。
+   */
+  const btwPanelOnScreen =
+    sidePanel.enabledPanelIds.includes('btw') && sidePanel.split && sidePanel.activePanelId === 'btw'
+  /**
+   * 浮层是否真的占着屏幕（因而可以接管输入）。渲染门与所有「让位 / 暂停
+   * 输入」的判定都读这一个值：`btwOverlayOpen` 只是「想要浮层」，分栏重新
+   * 出现后它可能为真却什么都不画——那时不能再让 PromptInput 与 Chat 的按键
+   * 处理器让位（否则 composer 消失、Esc/Ctrl+C 都失效）。
+   */
+  // 编辑器展开会收起分栏；此时不能复活浮层并暂停 PromptInput，否则编辑器
+  // 发布/撤下与分栏恢复会循环触发。主任务问卷也先接管显示和键盘，结束后
+  // 再恢复浮层请求，保留在途侧问。
+  const btwOverlayVisible = btwOverlayOpen && !btwPanelOnScreen
+    && !promptEditorOpen && questionSnapshot === null
   /**
    * 「全屏」出口（PanelBar 的 ⤢）：把侧栏里那个面板的内容切到它原本的整屏
    * 形态。只映射**真的有整屏对应物**的面板 id（能力位 capabilities.fullscreen
@@ -4615,7 +4710,7 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
   const couponVisible = coupon !== null && starModal === null
     && approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
-    && overlay.kind === 'none' && !btwOverlayOpen && recap === null
+    && overlay.kind === 'none' && !btwOverlayVisible && recap === null
     && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
     && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
     && !btwSceneOpen
@@ -4625,6 +4720,39 @@ export function Chat({
   const closeCoupon = React.useCallback(() => {
     if (coupon !== null) bonusNotices?.dismiss(coupon.orderId)
   }, [bonusNotices, coupon])
+
+  /**
+   * Escalation surface for a wedged abort. `cancelPending` means a turn was
+   * asked to stop and has not produced its terminal event yet; a tool that
+   * never settles can hold that state forever. The channel-side `cancel()`
+   * ignores repeats while the abort converges, so a repeated Esc used to be a
+   * silent no-op — the user's "I pressed Esc and nothing happened". The
+   * watchdog raises the warning once per interrupt episode and Esc answers
+   * every press; `/restart` (no longer gated on `working`) is the way out.
+   */
+  const interruptWatchdogRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const interruptWarnedRef = React.useRef(false)
+  const clearInterruptWatchdog = React.useCallback((): void => {
+    if (interruptWatchdogRef.current !== null) clearTimeout(interruptWatchdogRef.current)
+    interruptWatchdogRef.current = null
+  }, [])
+  React.useEffect(() => {
+    if (!channel.working || !channel.cancelPending) {
+      // The turn settled (or the session was replaced): the next interrupt
+      // episode starts with a fresh warning.
+      clearInterruptWatchdog()
+      interruptWarnedRef.current = false
+      return
+    }
+    if (interruptWatchdogRef.current !== null) return
+    interruptWatchdogRef.current = setTimeout(() => {
+      interruptWatchdogRef.current = null
+      if (!channel.working || !channel.cancelPending || interruptWarnedRef.current) return
+      interruptWarnedRef.current = true
+      channel.notify(t('interrupt-stuck'), { color: 'warning', timeoutMs: 10_000 })
+    }, INTERRUPT_STUCK_MS)
+  }, [channel.working, channel.cancelPending])
+  React.useEffect(() => () => clearInterruptWatchdog(), [clearInterruptWatchdog])
 
   useInput((input, key, event) => {
     // 开屏"求 star"弹窗开着时键盘全归它（↑/↓/Enter/Esc 由它自己的
@@ -4637,7 +4765,7 @@ export function Chat({
     // suspended to preserve async command drafts, making this guard also
     // essential for Ctrl+C: it must never clear the hidden composer.
     if (
-      btwOverlayOpen
+      btwOverlayVisible
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
@@ -5553,8 +5681,20 @@ export function Chat({
       // vim mode (either submode) yields: there Esc is a MODE key (INSERT→
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
-      if (channel.pending.length > 0) {
-        if (channel.interruptAndDock() === 0) channel.cancel()
+      const undocked = channel.pending.some(item => item.docked !== true)
+      if (undocked) {
+        // Docking is Esc's documented meaning for queued rows, and it starts
+        // its own interrupt; keep it even while a plain abort is in flight.
+        if (channel.interruptAndDock() === 0 && !channel.cancelPending) channel.cancel()
+      } else if (channel.cancelPending) {
+        // The abort is already in flight: `cancel()`/`interruptAndDock()`
+        // ignore repeats by contract, so answer the press instead of
+        // swallowing it. Past the watchdog window the turn is wedged, and
+        // the warning names `/restart` (allowed mid-turn) as the way out.
+        channel.notify(t(interruptWarnedRef.current ? 'interrupt-stuck' : 'interrupt-pending'), {
+          color: 'warning',
+          timeoutMs: interruptWarnedRef.current ? 10_000 : 4_000,
+        })
       } else {
         channel.cancel()
       }
@@ -6374,9 +6514,16 @@ export function Chat({
         }}
       />
     )
+    // Tooltip 单例层挂在最外层末尾：被截断的工作区路径条 hover 后由它画完整路径。
+    const supervisorScene = (
+      <>
+        {supervisorNode}
+        <TooltipLayer />
+      </>
+    )
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
-    return fullscreen ? supervisorNode : <AlternateScreen>{supervisorNode}</AlternateScreen>
+    return fullscreen ? supervisorScene : <AlternateScreen>{supervisorScene}</AlternateScreen>
   }
 
   // The session tree follows the browser's rule exactly: it REPLACES the
@@ -6405,7 +6552,7 @@ export function Chat({
   // conversation (an early return after every hook above has run), so there
   // is no transcript underneath to be repainted or bled through.
   if (settingsOpen && launchpadGate()) {
-    const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
+    const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} statusFields={statusFields} />
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
@@ -6536,7 +6683,7 @@ export function Chat({
    *  overlay union covers every picker/dialog and /tips in one check;
    *  message-selection mode and the /btw panel live outside it. */
   const promptSelectionActive =
-    selectionActive || overlay.kind !== 'none' || btwOverlayOpen
+    selectionActive || overlay.kind !== 'none' || btwOverlayVisible
 
   // These panels replace the visible composer, but PromptInput remains
   // mounted (suspended) so an async registry command cannot lose its exact
@@ -6546,7 +6693,7 @@ export function Chat({
     || dialogSnapshot !== null
     || overlay.kind === 'tips'
     || (recap !== null && (!recap.auto || recap.expanded))
-    || btwOverlayOpen
+    || btwOverlayVisible
     || questionPanelNode !== null
     || starModal !== null
     || couponVisible
@@ -7125,8 +7272,11 @@ export function Chat({
               }}
             />
           </Box>
-        ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
-          // 浮层只在 btw 面板未启用时显示；面板中途被启用就立即让位。
+        ) : btwOverlayVisible ? (
+          // 浮层只在 btw 线程没有真正上屏时显示：面板未启用，或分栏渲不
+          // 出来（窄屏 / inline / splitEnabled=false），或分栏
+          // 在、但画的是别的面板。侧栏真的显示 btw 线程时浮层立即让位——
+          // 单一 surface（判定见 btwPanelOnScreen）。
           <Box flexDirection="column" marginTop={1}>
             <BtwPanelFallback
               thread={btwOverlayThread}
@@ -7195,6 +7345,7 @@ export function Chat({
           activity={workingActivity}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          pluginFields={statusFields}
           // Backend-native permission modes: the footer mode segment always
           // shows (the base mode included) and clicks into the same
           // /permission picker the command opens (the launchpad param row's
@@ -7238,7 +7389,7 @@ export function Chat({
           订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
           resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
-        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayOpen}`}
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayVisible}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
       </SidePanelLayout>

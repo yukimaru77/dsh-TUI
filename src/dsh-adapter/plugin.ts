@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -10,6 +11,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
+import { channelOwnerCurrent } from './channel/owner.js'
 import { createDshSession } from './backend/session.js'
 import { createTuiSettingsService, type DelegateSettings } from './tui-settings.js'
 import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
@@ -30,8 +32,12 @@ import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
+import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
 import { logForDebugging } from '../utils/debug.js'
 import { createTerminalNotifier, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
+import type { WindowsToastInput, WindowsToastResult } from '../ink/terminal-notification-windows.js'
+import { getTerminalFocused } from '../ink/terminal-focus-state.js'
+import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
@@ -61,7 +67,7 @@ import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -89,7 +95,7 @@ import { getHostThemes, type TuiThemeHost, type TuiThemeRuntime } from './themes
 import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
-import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { trackHostSettingsSection, type TuiSettingsField, type TuiSettingsFieldWrite, type TuiSettingsSection } from './settings-sections.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { armAdmissionLoader } from './admission-loader.js'
 import { assembleBackendsFromProfile } from './backend-assembly.js'
@@ -217,10 +223,197 @@ export interface RuntimeApplyOptions {
   readonly exitSeam?: ProcessExitSeam
 }
 
+/** Where a Windows task-completion announcement delivers, and where it falls back to. */
+export interface TaskCompletionDelivery {
+  /** Live inventory from the running profile; installed packages alone do not own events. */
+  pluginManager?: Pick<PluginManagerView, 'listPlugins'>
+  /** Live owner/settings permission for pending native dispatch and fallback. */
+  canDispatch?: () => boolean
+  /** Hand the completion to the native toast transport (D8 keeps the dedup inside it). */
+  toast(input: WindowsToastInput): Promise<WindowsToastResult>
+  /** The terminal bell, used when the native transport is unavailable. */
+  terminal(title: string, message: string): void
+}
+
+/** The two live task-notification settings both delivery paths read. */
+export interface TaskNotificationSettings {
+  /** When a completion is announced at all: `off` suppresses it entirely. */
+  condition: TaskNotifications
+  /** How it is delivered: the native toast here, a terminal sequence or the bell there. */
+  method: NotificationMethod
+}
+
+/** The terminal notifier the host configures, as `createTerminalNotifier` returns it. */
+export type TerminalNotifier = ReturnType<typeof createTerminalNotifier>
+
+/** The live task-notification settings and their one writer. */
+export interface TaskNotificationSettingsHandle {
+  /** The current values; the toast branch and the terminal fallback read these. */
+  readonly settings: TaskNotificationSettings
+  /**
+   * Adopt a new condition/method: the terminal notifier and the toast branch
+   * both read these, so one writer keeps them in step.
+   * @param condition - The new condition, or undefined for the default.
+   * @param method - The new method, or undefined for the default.
+   */
+  configure(condition: TaskNotifications | undefined, method: NotificationMethod | undefined): void
+}
+
+/**
+ * Create the live task-notification settings around a notifier.
+ *
+ * The notifier holds the values for the terminal path, and the Windows branch
+ * needs the same two before it can decide whether to spawn anything. One writer
+ * keeps them in step - `applyDisplay` is the second caller, for a live /settings
+ * edit.
+ * @param notifier - The terminal notifier to configure.
+ * @param initial - The values this launch starts with.
+ * @returns The settings and the single function that changes them.
+ */
+export function createTaskNotificationSettings(
+  notifier: TerminalNotifier,
+  initial: TaskNotificationSettings,
+): TaskNotificationSettingsHandle {
+  const settings: TaskNotificationSettings = { ...initial }
+  return {
+    settings,
+    configure(condition, method) {
+      settings.condition = condition ?? 'unfocused'
+      settings.method = method ?? 'auto'
+      notifier.configure(condition, method)
+    },
+  }
+}
+
+/**
+ * Ring the terminal for a completion the host's gate already approved.
+ *
+ * The gate asks whether the terminal is focused; this port runs after the toast's
+ * await, which is up to 30 s of PowerShell. Asking the focus question a second
+ * time here would drop the bell for a user who came back to the terminal in that
+ * window - while the log had already reported it rung (AC-5). The decision
+ * travels in instead. `notify()` is synchronous, so the override covers exactly
+ * this call.
+ * @param notifier - The terminal notifier the host configured.
+ * @param settings - The live settings the decision was taken from.
+ * @param title - The localized title.
+ * @param message - The single-line summary; empty rings for the title alone.
+ */
+export function ringTaskCompletion(notifier: TerminalNotifier, settings: TaskNotificationSettings, title: string, message: string): void {
+  // A later explicit off still cancels sound; merely regaining focus does not.
+  notifier.configure(settings.condition === 'unfocused' ? 'always' : settings.condition, 'bel')
+  try {
+    notifier.notify(title, message)
+  } finally {
+    notifier.configure(settings.condition, settings.method)
+  }
+}
+
+/**
+ * Show one task-completion toast and answer for what it did.
+ *
+ * Exactly one answer reaches the terminal path: `unavailable` rings the bell
+ * (AC-5), because the alternative is a notification the user never learns
+ * about. `shown` is already delivered and `yielded` belongs to the external
+ * notifier (D8/AC-6) — ringing after either would remind the user twice.
+ *
+ * The transport is a parameter so the regression can drive all three answers
+ * without a toast, a registry write or a child process.
+ * @param title - The localized title.
+ * @param message - The single-line summary; empty shows the title alone.
+ * @param backendId - The session that completed; a DSH plugin only covers DSH events.
+ * @param delivery - The toast port, and the terminal path to fall back to.
+ */
+export async function deliverTaskCompletionOnWindows(
+  title: string,
+  message: string,
+  backendId: string,
+  delivery: TaskCompletionDelivery,
+): Promise<void> {
+  let externalNotifierActive = false
+  if (backendId === 'dsh' && delivery.pluginManager !== undefined) {
+    try {
+      const plugins = await delivery.pluginManager.listPlugins()
+      externalNotifierActive = plugins.some(plugin => plugin.enabled && plugin.fiberPhase === 'active'
+        && ['@baobaolaodie/cc-dsh-notifier', 'cc-dsh-notifier'].includes(plugin.moduleName))
+    } catch {
+      logForDebugging('external notifier inventory unavailable; using the built-in Windows notification')
+    }
+  }
+  const result = await delivery.toast({
+    title,
+    message,
+    externalNotifierActive,
+    canDispatch: delivery.canDispatch,
+  })
+  if (result.status !== 'unavailable' || delivery.canDispatch?.() === false) return
+  // AC-5 wants the bell, not a silent loss - and the reason is what makes the
+  // pair "toast missing + bell rang" explainable afterwards. Ring first, then
+  // report: the port rings for a completion the gate already approved, and a line
+  // written ahead of the action is how the fallback came to log a bell that a
+  // second look at the focus had eaten.
+  const cause = result.detail === undefined ? result.reason : `${result.reason}: ${result.detail}`
+  delivery.terminal(title, message)
+  logForDebugging(`windows toast unavailable (${cause}); using the terminal fallback`)
+}
+
+/**
+ * The production toast port. The Windows module is imported on first use and
+ * never at load time, so this path does not pull it in on a host that never
+ * delivers a toast. A load that fails answers like any other unavailable
+ * transport instead of throwing: this path is fire-and-forget, and the caller
+ * still has the bell.
+ */
+async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastResult> {
+  try {
+    const { notifyWindowsToast } = await import('../ink/terminal-notification-windows.js')
+    return await notifyWindowsToast(input)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    logForDebugging(`windows toast transport failed to load (${detail})`)
+    return { status: 'unavailable', reason: 'unexpected', detail }
+  }
+}
+
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   const taskNotifier = createTerminalNotifier(process.stdout)
-  taskNotifier.configure(config.taskNotifications, config.notificationMethod)
+  const { settings: notificationSettings, configure: configureTaskNotifications } = createTaskNotificationSettings(taskNotifier, {
+    condition: config.taskNotifications ?? 'unfocused',
+    method: config.notificationMethod ?? 'auto',
+  })
+  configureTaskNotifications(config.taskNotifications, config.notificationMethod)
+  /**
+   * Whether a task completion is announced at all: the one gate, asked before
+   * the Windows transport so a suppressed notification never costs a PowerShell
+   * process, and so a delivered toast never also rings the bell. The Windows
+   * fallback re-enters through `ringTaskCompletion`, which carries this answer
+   * instead of asking the focus question again after the awaits. Explicit off or
+   * owner release revokes pending dispatch; an already started host is not recalled.
+   */
+  const taskCompletionAlertsEnabled = (): boolean =>
+    process.stdout.isTTY === true
+    && notificationSettings.condition !== 'off'
+    && !(notificationSettings.condition === 'unfocused' && getTerminalFocused())
+  /**
+   * Announce a finished task: the channel's `onTaskComplete` payload and gate,
+   * with the Windows method resolved first (`auto` picks the toast there, D2).
+   */
+  const announceTaskCompletion = (preview: string | undefined, backendId: string): void => {
+    if (!taskCompletionAlertsEnabled()) return
+    const title = t('task-complete-notification')
+    const message = preview ?? ''
+    if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
+      taskNotifier.notify(title, message)
+      return
+    }
+    void deliverTaskCompletionOnWindows(title, message, backendId, {
+      pluginManager: pluginManagerOf(ctx),
+      canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
+      toast: showWindowsToast,
+      terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
+    })
+  }
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
   // silent). First line lands before anything in this function can throw.
@@ -919,7 +1112,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // channel's own settings reads look the section up by it.
     settingsNs: tuiSettingsNs,
     onTaskComplete: preview => {
-      if (!shadow) taskNotifier.notify(t('task-complete-notification'), preview)
+      if (!shadow) announceTaskCompletion(preview, rawChannel.sessionRef.backendId)
     },
     settingsService: tuiSettings,
     // The backend reports its model with its first turn (`system/init`);
@@ -1190,7 +1383,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
         taskNotifications: Schema.union(['off', 'unfocused', 'always']),
-        notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
+        // Must mirror Config's union (`src/dsh-adapter/index.ts`): a method
+        // missing here is rejected by /settings and never reaches the runtime.
+        notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
@@ -1228,6 +1423,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
           trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
           shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
+          pluginFields: Schema.boolean().default(DEFAULT_STATUS_BAR.pluginFields),
+          pluginFieldsOrder: Schema.string().default(DEFAULT_STATUS_BAR.pluginFieldsOrder),
         }).default({ ...DEFAULT_STATUS_BAR }),
         // Side-panel preferences. No schema defaults on purpose (same rule as
         // foldTerminalCommand/expandEditor above): a default here would come
@@ -1435,7 +1632,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
-      taskNotifier.configure(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
+      configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
@@ -1587,15 +1784,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // dsh-tui-* host-seam insert list right after load (issue #557), which
   // left this registration silently skipped and /settings read-only.
   // channel.ts reads through the same fallback, so both sides meet in the
-  // same registry either way.
-  // The in-process DSH kernel registers into the local host first and moves
-  // the section to the composition's service once it exists.
-  let rehomeSettingsSection = (): void => undefined
+  // same registry either way — but which registry that is can still change
+  // after this registration: the service row may activate later, or reload
+  // into an empty state. trackHostSettingsSection follows it, so the section
+  // never strands in the registry /settings stopped reading.
   {
-    let settingsSections = getHostSettingsSections(
-      ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost(ctx)
-    const tuiSection: Parameters<typeof settingsSections.register>[0] = {
+    const tuiSection: TuiSettingsSection = {
       ns: tuiSettingsNs,
       title: 'dsh-tui',
       groups: [...SETTING_GROUPS],
@@ -1800,6 +1994,28 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ...settingField('statusBar.shortcutHint'),
         },
         {
+          ...settingField('statusBar.pluginFields'),
+        },
+        {
+          ...settingField('statusBar.pluginFieldsOrder'),
+          // An empty draft means "show none" here, not the editor's default
+          // "clear" (which would fall back to `*` and silently re-show every
+          // field). `*` stays reachable by typing it, and an illegal shape
+          // (`a`, `a;b`, a duplicate key) blocks the save instead of being
+          // normalized into something the user did not ask for.
+          parse(text: string): TuiSettingsFieldWrite | undefined {
+            return parsePluginFieldsOrder(text).mode === 'invalid'
+              ? undefined
+              : { kind: 'set', value: normalizePluginFieldsOrder(text) }
+          },
+          // Unset in the user layer: show the value the footer actually uses
+          // (the schema default, `*`) instead of a blank row that would read
+          // as "none" next to the all-unchecked boxes.
+          format(value: unknown): string {
+            return normalizePluginFieldsOrder(value)
+          },
+        },
+        {
           ...settingField('sidePanel.splitEnabled'),
           format(value: unknown): string {
             // Unset in the user layer: the effective default is on.
@@ -1924,15 +2140,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
       ],
     }
-    let unregister = settingsSections.register(tuiSection)
-    ctx.effect(() => () => { unregister() })
-    rehomeSettingsSection = () => {
-      const service = getHostSettingsSections(ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined)
-      if (service === undefined || service === settingsSections) return
-      unregister()
-      settingsSections = service
-      unregister = service.register(tuiSection)
-    }
+    const disposeSection = trackHostSettingsSection(ctx, tuiSection)
+    ctx.effect(() => () => { disposeSection() })
   }
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
@@ -2178,7 +2387,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ctx,
           instance,
           bootedFullscreen,
-          t('restart-starting'),
+          // This line is the one the user actually sees before the terminal is
+          // handed over (the composer's toast dies with the unmount): a
+          // mid-turn restart must say that the running turn and its queued
+          // input are dropped, not promise a clean resume.
+          t(channel.working ? 'restart-during-turn' : 'restart-starting'),
           undefined,
           () => runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam),
         )
@@ -2448,12 +2661,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onPluginManage: createPluginManageEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
     }),
-    // `/team [status] | on | off`: the Agent Teams bundle through the same
-    // lifecycle flow (team-mode.ts).
+    // `/team [status]`: the live team report (team-mode.ts). The bundle switch
+    // is `/plugin enable|disable`, which shares the lifecycle flow.
     onTeamCommand: createTeamCommandEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
-      // The host reports `unknown` when it has no version: read the installed one.
-      kernelVersion: entrySlot?.kernelVersion === 'unknown' ? undefined : entrySlot?.kernelVersion,
     }),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -2658,10 +2869,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   /**
    * Services composed after the mount: re-read what the screen took as values
-   * at mount (Chat's stores, theme host, toast sink, /settings section).
+   * at mount (Chat's stores, theme host, toast sink). The /settings section
+   * follows its registry on its own (trackHostSettingsSection).
    */
   const refreshHostServices = (): void => {
-    rehomeSettingsSection()
     bindToastSink()
     if (!exited) instance?.rerender(buildTree())
   }
@@ -3379,6 +3590,16 @@ function superviseReplacement<T extends TuiRestartOptions>(exitSeam: ProcessExit
 
 function runRestart(ctx: Context, profile: string | undefined, sessionId: string, hint: (sessionId: string) => string = id => resumeCommand(profile, id), options: TuiRestartOptions = {}, exitSeam?: ProcessExitSeam): void {
   logRestartEvent('runRestart: entered, disposing cordis root')
+  // A wedged turn makes the root dispose wait forever: the agent teardown
+  // waits for the loop to reach quiescence, and a tool that ignores its
+  // AbortSignal never settles (dsh-agent-loop drains every dispatched tool on
+  // abort). Spawning the replacement then would race this process for the
+  // session mount, so the only honest answer is the resume hint the user can
+  // run after this process is gone.
+  const stalled = (): void => {
+    writeHandoffNotice(`\ndsh-tui restart timed out while stopping the current turn.${preservedSessionTail(sessionId, hint)}`)
+    process.exit(1)
+  }
   disposeRootAndThen(ctx, () => {
     logRestartEvent('runRestart: root disposed, starting restartTui')
     const supervision = superviseReplacement(exitSeam, options)
@@ -3408,7 +3629,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         process.exit(1)
       },
     )
-  })
+  }, stalled)
 }
 
 function runUpdate(

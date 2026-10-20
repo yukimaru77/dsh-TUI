@@ -233,6 +233,7 @@ Lists only inputs from the current project (the session's working directory), pl
 
 **/settings panel**
 `↑/↓` move · `Enter` expand/toggle/edit · `←/→` cycle a field that has options (booleans still only respond to `Enter`) ·
+`Tab` / `Shift+Tab`, or a click on the tab strip in fullscreen, switch **pages** (General plus the pages a plugin declares; hidden when only one page exists) ·
 changes save automatically, `Esc` exits
 
 **/btw panel**
@@ -341,7 +342,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/home` / `/agentview` / `/bg` | none | the same session manager (`/home`=workspace view · `/agentview`=hosted session state · `/bg`=send to background and open, alias `/background`) |
 | `/tree` | none | session fork tree: hover to preview, click to rewind / fork / switch branch |
 | `/fork` | none | copy the current session into a resumable clone (original unaffected) |
-| `/restart` | none | restart the process and resume this session (rejected mid-turn, `Ctrl+C` first) |
+| `/restart` | none | restart the process and resume this session. Allowed mid-turn too: the running turn is interrupted and queued input is not kept; if a tool ignores the interrupt and the process cannot shut down cleanly, it exits after ~5 s and prints the command that resumes this session |
 | `/kernel` | none | kernel picker: switch between DSH, Codex and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
 | `/dsh` / `/codex` / `/claude` | none | directly choose the named kernel through the same checks and restart flow as `/kernel`; the current kernel does not restart, a running turn blocks switching, and missing Claude opens the install wizard |
 | `/rename` | `<新名称>` | rename the current session (no arg shows the current title and usage) |
@@ -368,7 +369,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
 | `/init` | none | create `AGENTS.md` in the working directory (created / exists / failed) |
 | `/agents` | none | subagent list for this session |
-| `/team` | `status` (default) / `on` / `off` | switch experimental Agent Teams: enables or disables the team bundle, live when the profile hot-reloads; `status` reports the bundle, the service and this session's teammates |
+| `/team` | `status` (default) | experimental Agent Teams status; appears in Help and `/` completion only while the team service runs, reporting the bundle, the service and this session's teammates. Switch with `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile` (a typed `/team` while the service is absent gives the enable route) |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
 | `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
@@ -404,7 +405,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/hooks` | none | placeholder: notes when DSH hooks aren't mounted in the composition |
 | `/mcp` | none | MCP connection state (tools grouped as `mcp__服务器__工具`); shows a `cordis.patch.yml` snippet when unconfigured |
 | `/skills` | none | skill-catalog selector (name+source+blurb); Enter fills a direct-call skill as `/name ` |
-| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <name\|id>` · `disable <name\|id>` · `check <dsh-plugin.json path>` · `info <id or spec>` · `registries` | `list` shows the plugins you added, without the installation-supplied bundles, and points at the detail / remove / enable / disable forms; bare `/plugin` gives the full diagnostics — trust banner + host descriptor + authorization matrix + ledger + the profile's bundles and rows; `install <spec>` installs a plugin into this profile — a pre-install notice and a trust confirmation, first-party packages on the packaged feed skip the confirmation, `esc` closes the pane (during an install it attempts cancellation and waits for writes to settle; if too late, it waits for completion; exemptions already written remain), blocked build scripts are approved in the pane, and an incompatible version can be exempted for that exact version; `remove` / `enable` / `disable` are the lifecycle actions — a bundle name is matched exactly and before any row identity, which is then `entryId` / `patchId` / module name; a module name matching multiple rows requires a specific row ID; gate 2 refuses the bundle providing this app, the host layer `dsh-base` and this package's own rows, with a reason and no service call at all, while every enable and removal asks first because installed sources cannot be verified. **These three have no cancellation**: `esc` only closes the pane, the write finishes and reports itself into the transcript, and a removal never deletes your own data under `~/.dsh-tui` (any residue is reported once). `check` validates a manifest and reports compatibility, `info` describes an installed bundle or an install spec, `registries` lists where installations ask |
+| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <name\|id>` · `disable <name\|id>` · `check <dsh-plugin.json path>` · `info <id or spec>` · `registries` | `list` shows the plugins you added, without the other installation-supplied bundles, and lists the experimental features this app knows how to drive (off by default) with their switch and usage; bare `/plugin` gives the full diagnostics — trust banner + host descriptor + authorization matrix + ledger + the profile's bundles and rows; `install <spec>` installs a plugin into this profile — a pre-install notice and a trust confirmation, first-party packages on the packaged feed skip the confirmation, `esc` closes the pane (during an install it attempts cancellation and waits for writes to settle; if too late, it waits for completion; exemptions already written remain), blocked build scripts are approved in the pane, and an incompatible version can be exempted for that exact version; `remove` / `enable` / `disable` are the lifecycle actions — a bundle name is matched exactly and before any row identity, which is then `entryId` / `patchId` / module name; a module name matching multiple rows requires a specific row ID; gate 2 refuses the bundle providing this app, the host layer `dsh-base` and this package's own rows, with a reason and no service call at all, while every enable and removal asks first because installed sources cannot be verified. **These three have no cancellation**: `esc` only closes the pane, the write finishes and reports itself into the transcript, and a removal never deletes your own data under `~/.dsh-tui` (any residue is reported once). `check` validates a manifest and reports compatibility, `info` describes an installed bundle or an install spec, `registries` lists where installations ask |
 | `/update` | none | update the TUI and auto-restart to resume the session (only via `dsh --profile`; rejected mid-turn) |
 | `/terminal-setup` | none | terminal setup advice (Windows Terminal ≥110 columns, paste keys) |
 
@@ -599,9 +600,11 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
-- right group: git branch → working directory (basename only in compact mode) → session title → short session ID (`#` + first 8 chars, for `--resume`)
+- right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (basename only in compact mode) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
-- Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, contextBar.
+- **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
+- **Per-field control and order**: `/settings → Status bar → Plugin field list` (`statusBar.pluginFieldsOrder`) lists the fields in their three slot groups for individual ticking, with an `Advanced` row at the bottom for ordering. The value looks like `build,ci;git;pet` — exactly three `;`-separated groups, group index = slot, order inside a group = display order; a listed key follows its group (overriding the plugin-declared slot). Empty = show none; `*` (default) = all of them (future registrations included, in their declared slots and registration order). Entering the advanced row from `*` pre-fills the three-group skeleton, and saving it untouched keeps the mode; once a list is fixed, newly registered fields stay hidden until ticked.
+- Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, contextBar, pluginFields.
 - Default off: tokens, tps, gitBranch, sessionTitle, sessionId, mode, activity, trajectory.
 
 **Row 3 — hints / working activity + mini trace bar**
@@ -632,7 +635,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | whaleIdle | whale welcome idle animation (default on): fin/tail/blink, sleeps with Z after 10 s idle; click for a heart. Freezes after the first task |
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): under the DeepSeek brand, enable with `companion.skin=whale`; the `deepy` and `whaleGirl` skins override it. Claude uses its own artwork; Codex uses its own raster portrait or the maid character-art fallback. Both brands ignore these settings for splash artwork. Real raster (Kitty/Sixel), with character-art fallback. See the [precedence table](configuration.en.md) |
-| diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
+| diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified; in two columns (auto at ≥110 cols, or an explicit split) a collapsed card still keeps one line per change, clipping a too-wide line and ending with a `… folded N chars (ctrl+o to expand)` hint; once expanded (`Ctrl+O` or a click), a too-wide line wraps to its own column width and the two columns stay aligned row by row (the same change line starts at the same row on both sides) |
 | thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
 | btw.contextBudget | Total character budget of recent Q/A pairs carried into a `/btw` follow-up (default 24000, range 1000-200000); oldest whole pairs are dropped first. Applies immediately |
 | btw.contextTurns | Number of most recent completed Q/A pairs explicitly carried into a `/btw` follow-up (default 4, range 1-8); older pairs stay in the thread and panel but are omitted from the request. Applies immediately |
@@ -648,7 +651,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
-| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId) |
+| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
 
 **effortDefault**: when the model lacks that level, drop one level and show a notice; priority settings user layer > the last `/effort`
 (effort.json, the level the last session ran) > cordis `effort` (deployment default) > model default.
@@ -747,7 +750,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 11. Context pressure ≥80% turns amber, ≥95% red — time to `/compact` (unavailable under minimal preset).
 12. Session manager (`/resume`, `/home`, `/agentview`, `/bg`, or `⌸` at the input line start):
     type to filter, `★` pin, `Ctrl+X` stop a background session; switching just parks it.
-13. Mid-turn, `/compact`, `/model`, `/restart` are rejected — `Ctrl+C` first or wait for the turn to end.
+13. Mid-turn, `/compact` and `/model` are rejected — `Ctrl+C` first or wait for the turn to end. `/restart` is not gated: it interrupts the running turn (queued input is not kept) and restarts; if Esc or `Ctrl+C` cannot stop a turn (a tool ignoring the interrupt) the process exits after ~5 s and prints the command that resumes this session — run it to get back in.
 14. `/model` switches subsequent requests in the same session (ID and history kept); the choice is saved as the default for new sessions, while a resumed session keeps its last recorded request route.
 
 **Ask the manual**

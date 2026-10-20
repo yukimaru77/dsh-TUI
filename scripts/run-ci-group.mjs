@@ -145,6 +145,14 @@ const GROUPS = {
 // 整个 0.6.x 才被发现——挂进来防再烂。
     ["repro-pill", ['node', '--import', 'tsx/esm', 'scripts/repro-pill.tsx']],
     ["repro-ctrlc", ['node', '--import', 'tsx/esm', 'scripts/repro-ctrlc.tsx']],
+// 卡死回合的逃生面回归（真实 Chat + 假 channel）：工具不响应中断时
+// cancelPending 永不收敛——第一次 Esc 之后重复 Esc 过去被 in-flight 闸门
+// 静默吞掉、/restart 被 working 门禁拒绝、Enter 插话还承诺「下一步立即
+// 处理」，用户无路可走。断言 Esc 每次都有可见应答、`/restart` 在回合中直达
+// onRestart、卡住时的插话提示不再承诺立即处理、同一收敛窗口内两次
+// Ctrl+Enter 不重复投递、channel 同步抛错时草稿不丢且失败可见；
+// 另含「空闲空输入 ⏎ 发送停靠队列」基线防回归。
+    ["repro-stuck-turn", ['node', 'scripts/repro-stuck-turn.mjs']],
 // /settings 设置屏回归（issue #165）：开屏、staged 编辑、revision 栅栏
 // 保存、密钥走 credentials、Esc 返回会话。
     ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
@@ -156,11 +164,26 @@ const GROUPS = {
 // 焦点序跳过标题直达字段），page 组与无 mode 的旧默认仍走子页；空的
 // inline 组不渲染孤儿标题。
     ["verify-settings-root-inline", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-root-inline.tsx']],
+// /settings 分页（页签）回归：不声明 page 的区块并入「常规」页，声明同一
+// page 的区块共页（页签按注册顺序、常规在最前）；Tab/Shift+Tab 与点击切换、
+// 每页焦点记忆、从 group 子页切页回根页；只有一页时不显示页签、布局不变。
+    ["verify-settings-pages", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-pages.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
 // 2026-08-27）——tokenize 提取→回放链路的注入 payload 必须被剥除。
     ["verify-osc8-sanitize", ['node', '--import', 'tsx/esm', 'scripts/verify-osc8-sanitize.tsx']],
+// OSC 7501 程序状态协议回归：线格式、自由文本 base64/控制字符剥离/字节
+// 上限、整条拒绝、clear、启用门控（默认开、TTY 必需、可 opt-out），以及
+// hook 的优先级与去重（blocked > working > done/error > idle；恢复会话的
+// 残留终态不得误报 done）；终态取自真实 turn.end.reason 的投影，用量摘要
+// 缺失的回合也照报。
+    ["verify-osc7501", ['node', '--import', 'tsx/esm', 'scripts/verify-osc7501.tsx']],
+// OSC 7501 取证解码器（scripts/decode-osc7501.mjs）回归：不可信日志里的
+// 控制字符一律转义展示、解码后含控制字符的报告整条拒绝（清屏/换行/OSC 52
+// 一类 payload 不得从「看一眼日志」变成执行），且 stdin 与文件两个入口的
+// stdout 里不存在可执行控制字节；--follow 只读新增字节，不重放历史报告。
+    ["verify-decode-osc7501", ['node', 'scripts/verify-decode-osc7501.mjs']],
 // 文件链接 ANSI 完整性回归：renderCodeSpan 把已上色的路径代码段传入
 // createHyperlink 时，防注入消毒会剥掉合法 \x1b、SGR 参数文本上屏
 // （[38;2;…m 残片）；链接标签的样式序列同样不得残留裸参数。
@@ -324,6 +347,7 @@ const GROUPS = {
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
+    ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
 // 原生光标：inline/fullscreen × 宽/窄终端、无同步输出的重绘顺序、
 // 纯光标移动不隐藏、列表焦点与可见性切换、resize、外部交接与退出恢复。
     ['verify-native-cursor', ['node', '--import', 'tsx/esm', 'scripts/verify-native-cursor.tsx']],
@@ -806,6 +830,15 @@ const GROUPS = {
 // 状态行的渲染面：投影值经 hook 到达屏幕、后台会话不得抢当前行、清空即消失、
 // 两个接缝同时有值时以投影为准（读侧迁移对显示是零变化）。
     ["verify-activity-store-render", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store-render.tsx']],
+// 插件底栏字段（接缝十一的 setField）：准入/归属/上限/ledger + 三槽渲染、
+// 零足迹、设置开关、minColumns、宽度阶梯、hover 详情与点击错误隔离。
+    ["verify-status-fields", ['node', '--import', 'tsx/esm', 'scripts/verify-status-fields.tsx']],
+// 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical
+// 归一化、组即槽的渲染覆写，以及 key 语法/槽名与 status.ts 不漂移。
+    ["verify-plugin-field-order", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-order.ts']],
+// 底栏字段名单的设置面：三槽勾选、`*` 实体化、预填/收口、非法草稿零写入、
+// 未认领占位与活注册表。
+    ["verify-plugin-field-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-picker.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
 
@@ -830,6 +863,11 @@ const GROUPS = {
 // 浏览型命令（`/resume`）保留 key 但走 GRAY_ZONE_EXEMPT_COMMANDS 留在正常区。
     ["verify-command-hold", ['node', '--import', 'tsx/esm', 'scripts/verify-command-hold.ts']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
+// 底栏 git 分支跟随工作区 HEAD（真实 channel + 假 shell + 自造 .git）：HEAD 改写后
+// 不重建 channel 即跟随、detached 清空而非留旧值、HEAD 未变不重探不重绘、
+// releaseContributions 后停止刷新、无 .git 不探测不抛错、linked worktree 的
+// gitdir: 形态同样跟随。
+    ['verify-git-branch-refresh', ['node', 'scripts/verify-git-branch-refresh.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
 // 真 Agent/Session/JSONL：启动与连续 /new 不落盘权限初始化，首个输入完整
 // 保存初始权限；异步写入交接、失败重试、退出与并发工厂保持连续事件日志。
@@ -883,10 +921,13 @@ const GROUPS = {
 // teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅；整屏与侧栏、
 // 窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
     ["verify-team-dashboard", ['node', '--import', 'tsx/esm', 'scripts/verify-team-dashboard.tsx']],
-// 团队模式开关（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
-// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status|on|off 与关闭时
-// 有成员运行的确认（/plugin disable 团队 bundle 同问）。
+// 团队状态（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
+// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
+// 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
+// 其他服务的 internal/service 事件不得误发布它。
+    ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],
 // 分段估算口径回归（#1170）：estimateTokens 由 chars/4 改为 CJK 感知的纯函数——
 // 单条纯 ASCII 与旧口径相同（显式快路径；跨消息累加因改为逐条 ceil 会有 ≤1
 // token/条的舍入差），中文/全角按 ~1.4 字符/token、其它脚本按 ~2；单调不减、
@@ -913,6 +954,12 @@ const GROUPS = {
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
 // 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
+// Windows toast 端到端（AC-1/5/6/7/8）：任务完成 → 解析为 windows → 去重判定 → XML 转义 →
+// 要 spawn 的命令行形态 → AUMID 被拒降级为 BEL；非 win32 零副作用。注册表/子进程/端口全是注入桩。
+    ['verify-task-notifications-windows', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications-windows.ts']],
+// Windows toast transport 契约：XML 转义纯函数、AUMID 注册状态机（只注册一次、被拒不重试）、
+// 外部通知插件去重、非 win32 零副作用。端口全注入：不写注册表、不 spawn。
+    ['verify-notify-transport', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-transport.ts']],
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],

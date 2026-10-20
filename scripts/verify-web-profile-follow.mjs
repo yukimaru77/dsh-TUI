@@ -1,6 +1,6 @@
 /** Keyless real-profile test: unchanged backend composition and live Web edits. */
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { mkdtemp, mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
@@ -22,6 +22,15 @@ const report = join(scratch, 'report.json')
 let child
 let log = ''
 try {
+  for (const command of ['cli', 'run', '-p', 'models']) {
+    const help = execFileSync('/bin/sh', [join(root, 'bin/dsh-tui-web'), command, '--help'], {
+      cwd: scratch,
+      env: { ...process.env, HOME: scratch, DSH_HOME: home },
+      encoding: 'utf8', timeout: 10000,
+    })
+    assert.match(help, /DSH headless-compatible profile \(default: headless\)/)
+  }
+  console.log('Launcher: automation commands reach the CLI without the terminal overlay')
   await mkdir(profile, { recursive: true })
   const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
   await writeFile(join(profile, 'package.json'), JSON.stringify(manifest))

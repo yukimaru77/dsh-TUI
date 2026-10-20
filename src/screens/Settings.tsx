@@ -10,12 +10,13 @@ import { POINTER, TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
 import { getLang, t, type I18nKey } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
-import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
+import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsPage, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { panelStore } from '../components/sidePanel/PanelStore.js'
 import { registerBuiltinPanels } from '../components/sidePanel/builtinPanels.js'
-import { SIDE_PANEL_ID_PATTERN } from '../tuiDisplayPrefs.js'
+import type { TuiStatusFieldEntry } from '../dsh-adapter/status.js'
+import { ALL_PLUGIN_FIELDS, formatPluginFieldsOrder, parsePluginFieldsOrder, STATUS_FIELD_SLOTS, SIDE_PANEL_ID_PATTERN, type StatusFieldSlot } from '../tuiDisplayPrefs.js'
 
 // The panel picker enumerates the live registry: builtin panels register on
 // import (same idempotent call SidePanelColumn makes), plugins come and go
@@ -44,6 +45,10 @@ type FocusEntry =
   | { kind: 'panelToggle'; ns: string; field: TuiSettingsField; panelId: string }
   /** The picker's raw-text escape hatch (reorder / future plugin ids). */
   | { kind: 'panelAdvanced'; ns: string; field: TuiSettingsField }
+  /** One checkbox row of the statusBar.pluginFieldsOrder picker. */
+  | { kind: 'fieldToggle'; ns: string; field: TuiSettingsField; fieldKey: string }
+  /** The field picker's raw-text escape hatch (the `a,b;c;d` list). */
+  | { kind: 'fieldAdvanced'; ns: string; field: TuiSettingsField }
 
 /**
  * The sidePanel.panels field renders as a checkbox multi-select over the live
@@ -54,6 +59,126 @@ type FocusEntry =
  */
 function isPanelListField(ns: string, field: TuiSettingsField): boolean {
   return ns === 'dsh-tui' && field.path.join('.') === 'sidePanel.panels'
+}
+
+/**
+ * The plugin footer field list renders as a per-slot checkbox picker over the
+ * live `tuiStatus` registry: three slot subheads, one row per field, and the
+ * advanced `a,b;c;d` row. Its stored value stays the exact list string —
+ * schema and persistence contract unchanged. Scoped to the TUI's own
+ * namespace so a plugin section carrying the same path keeps the generic row.
+ */
+function isFieldListField(ns: string, field: TuiSettingsField): boolean {
+  return ns === 'dsh-tui' && field.path.join('.') === 'statusBar.pluginFieldsOrder'
+}
+
+/** One checkbox row of the plugin footer field picker. */
+interface PluginFieldRow {
+  readonly key: string
+  readonly checked: boolean
+  readonly title: string
+  readonly description: string
+}
+
+/** One slot's run of rows. */
+interface PluginFieldGroup {
+  readonly slot: StatusFieldSlot
+  readonly rows: readonly PluginFieldRow[]
+}
+
+function fieldSlotLabel(slot: StatusFieldSlot): string {
+  return t(slot === 'left-tail' ? 'settings-fields-slot-left-tail'
+    : slot === 'right-head' ? 'settings-fields-slot-right-head'
+      : 'settings-fields-slot-right-tail')
+}
+
+/**
+ * The picker's rows for one stored value. `*` (and an invalid value, which the
+ * footer also reads as `*`) lists every field checked in its declared slot;
+ * `''` lists every field unchecked; an explicit list lists its keys in list
+ * order (checked) followed by the fields it does not name (unchecked), each in
+ * the slot it declares. A listed key whose group is not its declared slot is
+ * marked as moved — that annotation is how the screen tells the user what the
+ * plugin asked for after the list took over.
+ */
+function pluginFieldGroups(text: string, fields: readonly TuiStatusFieldEntry[]): PluginFieldGroup[] {
+  const parsed = parsePluginFieldsOrder(text)
+  const listed = parsed.mode === 'groups' ? parsed.groups : undefined
+  const allShown = parsed.mode === 'all' || parsed.mode === 'invalid'
+  const byKey = new Map(fields.map(field => [field.key, field] as const))
+  const named = new Set<string>(listed === undefined ? [] : listed.flat())
+  return STATUS_FIELD_SLOTS.map((slot, index) => {
+    const rows: PluginFieldRow[] = []
+    if (listed === undefined) {
+      for (const field of fields) {
+        if (field.slot !== slot) continue
+        rows.push({ key: field.key, checked: allShown, title: field.text, description: field.key })
+      }
+      return { slot, rows }
+    }
+    for (const key of listed[index] ?? []) {
+      const field = byKey.get(key)
+      rows.push({
+        key,
+        checked: true,
+        title: field?.text ?? key,
+        description: field === undefined
+          ? t('settings-fields-unclaimed')
+          : field.slot === slot ? field.key : `${field.key} · ${t('settings-fields-moved', { slot: fieldSlotLabel(field.slot) })}`,
+      })
+    }
+    for (const field of fields) {
+      if (named.has(field.key) || field.slot !== slot) continue
+      rows.push({ key: field.key, checked: false, title: field.text, description: field.key })
+    }
+    return { slot, rows }
+  })
+}
+
+/** Materialize a value into three mutable groups: `''` starts empty, while `*`
+ *  (and an invalid value) starts from the registry so a toggle never silently
+ *  discards the current arrangement. */
+function pluginFieldListFrom(text: string, fields: readonly TuiStatusFieldEntry[]): string[][] {
+  const parsed = parsePluginFieldsOrder(text)
+  if (parsed.mode === 'groups') return parsed.groups.map(group => [...group])
+  return STATUS_FIELD_SLOTS.map(slot => (parsed.mode === 'none'
+    ? []
+    : fields.filter(field => field.slot === slot).map(field => field.key)))
+}
+
+/** Tick/untick one key: an untick removes it wherever it sits, a tick appends
+ *  to the end of the group its row lives in (its declared slot). All groups
+ *  empty collapses to `''` — "none" is a legal state, not a refusal. */
+function togglePluginFieldText(text: string, fields: readonly TuiStatusFieldEntry[], key: string): string {
+  const groups = pluginFieldListFrom(text, fields)
+  const at = groups.findIndex(group => group.includes(key))
+  if (at >= 0) {
+    groups[at].splice(groups[at].indexOf(key), 1)
+  } else {
+    const field = fields.find(candidate => candidate.key === key)
+    if (field === undefined) return text
+    groups[STATUS_FIELD_SLOTS.indexOf(field.slot)].push(key)
+  }
+  return groups.every(group => group.length === 0) ? '' : formatPluginFieldsOrder(groups)
+}
+
+/** The draft the advanced row opens with: `*` expands to the three-group
+ *  skeleton (the declared slots become the structure the user edits), while an
+ *  explicit list or the user's typo opens verbatim. */
+function pluginFieldDraft(text: string, fields: readonly TuiStatusFieldEntry[]): string {
+  if (parsePluginFieldsOrder(text).mode !== 'all') return text
+  return formatPluginFieldsOrder(pluginFieldListFrom(text, fields))
+}
+
+/** Saving the untouched skeleton must not pin the automatic mode: only a real
+ *  change makes the list explicit. The stored value is the other half of that
+ *  rule — an explicit list (even one identical to the current skeleton) is
+ *  never rewritten to `*`, or an unedited save would silently re-enable
+ *  "fields registered later". */
+function pluginFieldCommit(stored: string, text: string, fields: readonly TuiStatusFieldEntry[]): string {
+  // Only a draft that STARTED from `*` can collapse back to it.
+  if (parsePluginFieldsOrder(stored).mode !== 'all') return text
+  return text.trim() === pluginFieldDraft(stored, fields) ? ALL_PLUGIN_FIELDS : text
 }
 
 /**
@@ -125,6 +250,102 @@ interface RenderEntry {
 /** Pick the provider-owned translation for the active language. */
 function pick(text: string, descriptions: LocalizedDescriptions | undefined): string {
   return descriptions?.[getLang()] ?? text
+}
+
+/** Page id of the sections that declare none: the default "general" page.
+ *  Declared ids are validated against the plugin namespace grammar, so the
+ *  empty string can never collide with one. */
+const DEFAULT_PAGE_ID = ''
+
+/** One top-level page of the screen: its sections, in declaration order. */
+interface SettingsPageModel {
+  id: string
+  /** Declaration that named the page; undefined for the default "general"
+   *  page. Titles are resolved per render (see {@link settingsPageTitle}), so
+   *  a language hot-swap repaints the strip instead of leaving the old one. */
+  page?: TuiSettingsPage
+  sections: readonly TuiSettingsSection[]
+}
+
+/**
+ * Group the declared sections into the screen's top-level pages. A section
+ * that declares `page` joins every other section declaring the same id (the
+ * first declaration names the page); sections without one share the default
+ * "general" page, which stays first. Pages follow registration order, so the
+ * strip is stable across renders for a given section list.
+ */
+function settingsPages(sections: readonly TuiSettingsSection[]): SettingsPageModel[] {
+  const pages: SettingsPageModel[] = []
+  const byId = new Map<string, { id: string; page?: TuiSettingsPage; sections: TuiSettingsSection[] }>()
+  const general = sections.filter(section => section.page === undefined)
+  if (general.length > 0) {
+    const page = { id: DEFAULT_PAGE_ID, sections: general }
+    byId.set(DEFAULT_PAGE_ID, page)
+    pages.push(page)
+  }
+  for (const section of sections) {
+    const declared = section.page
+    if (declared === undefined) continue
+    const existing = byId.get(declared.id)
+    if (existing !== undefined) {
+      existing.sections.push(section)
+      continue
+    }
+    const page = { id: declared.id, page: declared, sections: [section] }
+    byId.set(declared.id, page)
+    pages.push(page)
+  }
+  return pages
+}
+
+/** The strip label of one page, localized at render time. */
+function settingsPageTitle(page: SettingsPageModel): string {
+  return page.page === undefined ? t('settings-page-general') : pick(page.page.title, page.page.descriptions)
+}
+
+/** The tab strip as drawn: which page indexes, their labels, and whether the
+ *  strip had to fall back to the compact (active tab + position) form. */
+interface SettingsTabsView {
+  indexes: readonly number[]
+  labels: readonly string[]
+  compact: boolean
+}
+
+/**
+ * Lay the page tabs out in `columns`. Labels shrink evenly while every page
+ * keeps at least one label cell; when even that cannot fit (a terminal
+ * narrower than three cells per page), only the active tab is drawn followed
+ * by its `i/N` position — the page you are on never disappears from the
+ * strip, and Tab / Shift+Tab still reach every page.
+ */
+function settingsTabsView(pages: readonly SettingsPageModel[], columns: number, activeIndex: number): SettingsTabsView {
+  const titles = pages.map(settingsPageTitle)
+  const budget = Math.floor((columns - titles.length * 2) / Math.max(1, titles.length))
+  if (budget >= 1) {
+    return { indexes: pages.map((_, index) => index), labels: titles.map(title => truncateWidth(title, budget)), compact: false }
+  }
+  return { indexes: [activeIndex], labels: [truncateWidth(titles[activeIndex] ?? '', Math.max(1, columns - 6))], compact: true }
+}
+
+/** One page tab: a reverse block when active, dim (or hovered) otherwise. */
+function PageTab({ label, active, onSelect }: {
+  label: string
+  active: boolean
+  onSelect?: () => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  return (
+    <Box
+      flexShrink={0}
+      onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {active
+        ? <Text color="remember" bold inverse>{` ${label} `}</Text>
+        : <Text dimColor={!hovered}>{` ${label} `}</Text>}
+    </Box>
+  )
 }
 
 /**
@@ -412,6 +633,10 @@ function CardRow({
   )
 }
 
+/** Stable empty default: a settings screen opened without the live registry
+ *  (tests, non-Chat hosts) still renders the field list, just empty. */
+const NO_STATUS_FIELDS: readonly TuiStatusFieldEntry[] = Object.freeze([])
+
 /**
  * The settings screen — `/settings` as a screen of its own (issue #165).
  *
@@ -430,9 +655,13 @@ function CardRow({
 export function Settings({
   channel,
   onClose,
+  statusFields = NO_STATUS_FIELDS,
 }: {
   channel: Channel
   onClose: () => void
+  /** Live plugin footer fields (`tuiStatus.setField`) the picker enumerates.
+   *  Chat already subscribes to the same store and hands the snapshot down. */
+  statusFields?: readonly TuiStatusFieldEntry[]
 }): React.ReactNode {
   // Explicit terminal size (not flexGrow) — the same rule the full-screen
   // session views follow inside the alternate screen's fixed-height box.
@@ -446,6 +675,10 @@ export function Settings({
   const [editing, setEditing] = React.useState<EditingState | null>(null)
   const [activeGroup, setActiveGroup] = React.useState<ActiveGroup | null>(null)
   const [focusIndex, setFocusIndex] = React.useState(0)
+  /** Selected page id; undefined = the first page (settings page ids are
+   *  stable across renders, so focus can be remembered per page). */
+  const [activePageId, setActivePageId] = React.useState<string | undefined>(undefined)
+  const pageFocusRef = React.useRef(new Map<string, number>())
   const [notice, setNotice] = React.useState<{ text: string; tone: 'error' | 'success' } | undefined>(undefined)
   /** Configured status of every secret field's credential ref. */
   const [secrets, setSecrets] = React.useState<ReadonlyMap<string, boolean>>(new Map())
@@ -505,8 +738,19 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host, sections, secretProbe])
 
+  // Top-level pages (tabs): sections without a declared page share the
+  // default "general" page; the strip only appears once something declares
+  // a page of its own.
+  const pages = React.useMemo(() => settingsPages(sections), [sections])
+  const activePageIndex = Math.max(0, pages.findIndex(page => page.id === activePageId))
+  const activePage = pages[activePageIndex]
+  React.useEffect(() => {
+    if (activePageId !== undefined && !pages.some(page => page.id === activePageId)) setActivePageId(undefined)
+  }, [activePageId, pages])
+
   const activeSection = activeGroup === null ? undefined : sections.find(section => section.ns === activeGroup.ns)
   const activeGroupSpec = activeSection?.groups?.find(group => group.id === activeGroup?.id)
+  const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
   React.useEffect(() => {
     if (activeGroup !== null && activeGroupSpec === undefined) {
       setActiveGroup(null)
@@ -541,6 +785,14 @@ export function Settings({
    *  its checkbox rows plus the advanced row, in the exact order the renderer
    *  below lays them out (the focus list and the layout share this order). */
   const fieldEntries = (ns: string, field: TuiSettingsField): FocusEntry[] => {
+    if (isFieldListField(ns, field)) {
+      const text = forms.get(ns)?.field(field).text ?? ''
+      return [
+        ...pluginFieldGroups(text, statusFields).flatMap(group =>
+          group.rows.map(row => ({ kind: 'fieldToggle' as const, ns, field, fieldKey: row.key }))),
+        { kind: 'fieldAdvanced' as const, ns, field },
+      ]
+    }
     if (!isPanelListField(ns, field)) return [{ kind: 'field', ns, field }]
     return [
       ...panelPickerRows(ns, field).map(row => ({ kind: 'panelToggle' as const, ns, field, panelId: row.id })),
@@ -553,13 +805,30 @@ export function Settings({
     ? activeSection.fields
       .filter(field => field.group === activeGroupSpec.id)
       .flatMap(field => fieldEntries(activeSection.ns, field))
-    : sections.flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
+    : (activePage?.sections ?? []).flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
       if (row.kind === 'field') return fieldEntries(section.ns, row.field)
       if (row.kind === 'page') return [{ kind: 'group', ns: section.ns, group: row.group }]
       return []
     }))
   const effFocus = Math.min(focusIndex, Math.max(0, focusable.length - 1))
   const focused = focusable.length === 0 ? undefined : focusable[effFocus]
+
+  /** Switch the visible page: remember this page's focus, drop a group
+   *  subpage (its section lives on the page we are leaving), and restore the
+   *  target page's last focus. */
+  const switchPage = (id: string): void => {
+    if (id === activePage?.id) return
+    // A group subpage's focus index is local to that subpage; recording it as
+    // the page's root focus would land on an unrelated row when the page comes
+    // back. The root focus was captured when the group row was activated.
+    if (activePage !== undefined && !inGroup) pageFocusRef.current.set(activePage.id, effFocus)
+    setActivePageId(id)
+    setActiveGroup(null)
+    setMode('list')
+    setEditing(null)
+    setFocusIndex(pageFocusRef.current.get(id) ?? 0)
+    setWindowStart(0)
+  }
 
   /**
    * Save a section's staged edits right now (auto-save: every confirmed edit
@@ -648,6 +917,20 @@ export function Settings({
   }
 
   /**
+   * Tick/untick one plugin footer field. The stored string keeps its exact
+   * semantics: keys already listed keep their relative order, a new tick
+   * appends to its slot group's end, unticking removes. `''` (none) is a
+   * legal outcome here — the picker has no "at least one" rule.
+   */
+  const togglePluginField = (ns: string, field: TuiSettingsField, key: string): void => {
+    const form = forms.get(ns)
+    if (form === undefined || !form.available) return
+    form.edit(field, togglePluginFieldText(form.field(field).text, statusFields, key))
+    bump()
+    saveSoon(ns)
+  }
+
+  /**
    * Activate one focusable entry — the keyboard Enter path, shared with the
    * mouse click. Groups open their subpage; picker checkbox rows toggle their
    * panel; boolean/select fields cycle their value; text/secret fields (and
@@ -655,6 +938,9 @@ export function Settings({
    */
   const activateEntry = (entry: FocusEntry): void => {
     if (entry.kind === 'group') {
+      // Remember the page root focus before the subpage resets it, so a page
+      // switch from inside the group returns to this row.
+      if (activePage !== undefined) pageFocusRef.current.set(activePage.id, effFocus)
       setActiveGroup({ ns: entry.ns, id: entry.group.id })
       setFocusIndex(0)
       setWindowStart(0)
@@ -664,12 +950,21 @@ export function Settings({
       togglePanel(entry.ns, entry.field, entry.panelId)
       return
     }
+    if (entry.kind === 'fieldToggle') {
+      togglePluginField(entry.ns, entry.field, entry.fieldKey)
+      return
+    }
     const form = forms.get(entry.ns)
     if (form === undefined || !form.available) return
     if (entry.kind === 'field' && (entry.field.kind === 'boolean' || entry.field.kind === 'select')) {
       cycleField(entry.ns, entry.field)
     } else {
-      setEditing({ ns: entry.ns, field: entry.field, draft: form.field(entry.field).text })
+      const text = form.field(entry.field).text
+      setEditing({
+        ns: entry.ns,
+        field: entry.field,
+        draft: isFieldListField(entry.ns, entry.field) ? pluginFieldDraft(text, statusFields) : text,
+      })
       setMode('edit')
     }
   }
@@ -691,7 +986,12 @@ export function Settings({
         // error badge and a toast; a valid one saves immediately (auto-save).
         const form = forms.get(editing.ns)
         if (form !== undefined) {
-          form.edit(editing.field, editing.draft)
+          form.edit(
+            editing.field,
+            isFieldListField(editing.ns, editing.field)
+              ? pluginFieldCommit(form.field(editing.field).text, editing.draft, statusFields)
+              : editing.draft,
+          )
           if (form.field(editing.field).invalid) {
             setNotice({ text: t('settings-field-invalid'), tone: 'error' })
             bump()
@@ -721,6 +1021,14 @@ export function Settings({
       setFocusIndex(Math.max(0, effFocus - 1))
     } else if (key.downArrow) {
       setFocusIndex(Math.min(Math.max(0, focusable.length - 1), effFocus + 1))
+    } else if (key.tab) {
+      // Tab / Shift+Tab walk the page tabs; the arrows keep the field focus.
+      // Editing owns the keyboard, so this only runs in list mode.
+      if (pages.length > 1) {
+        const step = key.shift ? -1 : 1
+        const next = pages[(activePageIndex + step + pages.length) % pages.length]
+        if (next !== undefined) switchPage(next.id)
+      }
     } else if (key.leftArrow || key.rightArrow) {
       // ←/→ cycle an options-bearing field (select rows and hybrid
       // text-with-options rows such as the page margin presets). Rows
@@ -945,7 +1253,110 @@ export function Settings({
     })
   }
 
+  /**
+   * The plugin footer field list's block: a dim title row, one subhead per
+   * slot with its checkbox rows, then the advanced `a,b;c;d` row. The rows come
+   * from `pluginFieldGroups`, the same function `fieldEntries` fans out from,
+   * so the focus list and the layout cannot drift.
+   */
+  const addFieldPicker = (section: TuiSettingsSection, field: TuiSettingsField): void => {
+    const ns = section.ns
+    const form = forms.get(ns)
+    const state = form?.field(field) ?? { text: '', overridden: false, invalid: false }
+    entries.push({
+      key: `field-picker-header:${ns}:${field.path.join('.')}`,
+      lines: 1,
+      node: <CardRow><PanelListHeaderRow title={pick(field.label, field.descriptions)} /></CardRow>,
+    })
+    for (const group of pluginFieldGroups(state.text, statusFields)) {
+      // A slot with nothing to show stays as a one-line subhead: the three
+      // groups are the grammar, so they must not disappear with their rows.
+      entries.push({
+        key: `field-picker-slot:${ns}:${group.slot}`,
+        lines: 1,
+        node: <CardRow><PanelListHeaderRow title={fieldSlotLabel(group.slot)} /></CardRow>,
+      })
+      for (const row of group.rows) {
+        const index = focusCursor
+        focusCursor += 1
+        const isFocused = focused?.kind === 'fieldToggle' && focused.ns === ns && focused.field === field && focused.fieldKey === row.key
+        const rowEvents = mode === 'edit'
+          ? undefined
+          : {
+              onClick: (): void => {
+                setFocusIndex(index)
+                togglePluginField(ns, field, row.key)
+              },
+              onMouseEnter: (): void => {
+                setFocusIndex(index)
+              },
+            }
+        entries.push({
+          key: `field-toggle:${ns}:${group.slot}:${row.key}`,
+          lines: 1,
+          focus: index,
+          node: (
+            <CardRow highlight={isFocused}>
+              <PanelToggleRow
+                checked={row.checked}
+                icon="·"
+                title={row.title}
+                description={row.description}
+                focused={isFocused}
+                columns={columns}
+                onClick={rowEvents?.onClick}
+                onMouseEnter={rowEvents?.onMouseEnter}
+              />
+            </CardRow>
+          ),
+        })
+      }
+    }
+    // The advanced escape hatch: same row/edit/invalid conventions as a text
+    // field, seeded with the three-group skeleton on the first Enter.
+    const advIndex = focusCursor
+    focusCursor += 1
+    const advFocused = focused?.kind === 'fieldAdvanced' && focused.ns === ns && focused.field === field
+    const advEditing = advFocused && mode === 'edit' && editing !== null
+    const advEvents = mode === 'edit'
+      ? undefined
+      : {
+          onClick: (): void => {
+            setFocusIndex(advIndex)
+            activateEntry({ kind: 'fieldAdvanced', ns, field })
+          },
+          onMouseEnter: (): void => {
+            setFocusIndex(advIndex)
+          },
+        }
+    entries.push({
+      key: `field-advanced:${ns}:${field.path.join('.')}`,
+      lines: 1,
+      focus: advIndex,
+      node: (
+        <CardRow highlight={advFocused}>
+          <FieldRow
+            label={t('settings-fields-advanced')}
+            kind="text"
+            value={advEditing ? `${editing?.draft ?? ''}▌` : state.text === '' ? t('settings-field-empty') : state.text}
+            selectLabel={undefined}
+            focused={advFocused}
+            editing={advEditing}
+            invalid={state.invalid}
+            staged={form?.isStaged(field) === true}
+            onClick={advEvents?.onClick}
+            onMouseEnter={advEvents?.onMouseEnter}
+          />
+        </CardRow>
+      ),
+    })
+  }
+
   const addField = (section: TuiSettingsSection, field: TuiSettingsField): void => {
+    if (isFieldListField(section.ns, field)) {
+      addFieldPicker(section, field)
+      return
+    }
     if (isPanelListField(section.ns, field)) {
       addPanelPicker(section, field)
       return
@@ -983,7 +1394,8 @@ export function Settings({
     }
     entries.push({ key: 'card:group:bottom', lines: 1, node: <CardBottom columns={columns} /> })
   } else {
-    sections.forEach((section, sectionIndex) => {
+    const rootSections = activePage?.sections ?? []
+    rootSections.forEach((section, sectionIndex) => {
       if (sectionIndex > 0) entries.push({ key: `gap:${section.ns}`, lines: 1, node: <Text> </Text> })
       entries.push({
         key: `card:${section.ns}:top`,
@@ -1051,7 +1463,7 @@ export function Settings({
 
     // Namespaces without a plugin-declared section are deliberately NOT
     // listed (they used to get a read-only YAML hint; user feedback: noise).
-    if (sections.length === 0) {
+    if (pages.length === 0) {
       entries.push({
         key: 'empty',
         lines: 1,
@@ -1085,7 +1497,8 @@ export function Settings({
   // Chrome: title row, footer rule, notice slot, help row. The notice slot is
   // permanent (blank while quiet) so a save/discard toast never shifts the
   // list above it.
-  const viewport = Math.max(1, rows - 4)
+  const showTabs = pages.length > 1
+  const viewport = Math.max(1, rows - 4 - (showTabs ? 1 : 0))
   const maxStart = Math.max(0, totalLines - viewport)
   React.useEffect(() => {
     setWindowStart(start => {
@@ -1110,11 +1523,13 @@ export function Settings({
     return start >= windowStart && start + entry.lines <= windowStart + viewport
   })
 
-  const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
-  const navigationHint = inGroup ? t('settings-hint-group') : t('settings-hint-list')
+  const navigationHint = inGroup
+    ? t('settings-hint-group')
+    : pages.length > 1 ? t('settings-hint-list-pages') : t('settings-hint-list')
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
+  const tabs = showTabs ? settingsTabsView(pages, columns, activePageIndex) : undefined
   const focusedHint = focused !== undefined && focused.kind !== 'group' && focused.field.hint !== undefined
     ? pick(focused.field.hint, focused.field.hintDescriptions)
     : undefined
@@ -1156,6 +1571,23 @@ export function Settings({
         {host === undefined && <Text color="warning">{`${t('settings-unavailable')} `}</Text>}
         {focusable.length > 0 && <Text dimColor>{`${effFocus + 1}/${focusable.length}`}</Text>}
       </Box>
+      {tabs !== undefined && (
+        <Box height={1} flexShrink={0} overflow="hidden">
+          {tabs.indexes.map((index, cell) => {
+            const page = pages[index]
+            if (page === undefined) return null
+            return (
+              <PageTab
+                key={page.id === DEFAULT_PAGE_ID ? '__general' : page.id}
+                label={tabs.labels[cell] ?? settingsPageTitle(page)}
+                active={index === activePageIndex}
+                {...(mode === 'edit' ? {} : { onSelect: () => switchPage(page.id) })}
+              />
+            )
+          })}
+          {tabs.compact && <Text dimColor>{` ${activePageIndex + 1}/${pages.length}`}</Text>}
+        </Box>
+      )}
       {/* Literal ink-box host for the wheel — every Box flavor is a compiled
           component whose prop list drops onWheel (SuggestionCard precedent).
           Rolling the wheel walks the focus, and the focus-follow window
